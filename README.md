@@ -4,6 +4,8 @@
 > 스마트팜 환경·잎 사진을 받아 **작물 분류 → 잎 병해충 진단 → 자연어 처방**까지 가는 멀티모달 AI.
 > 작물 **토마토 단일로 시작 → 전이학습으로 다작물 확장** (딸기·오이·참외…).
 
+[![Streamlit](https://img.shields.io/badge/Streamlit-라이브_데모-FF4B4B?logo=streamlit&logoColor=white)](https://smartfarm-ai.streamlit.app/)
+
 ---
 
 ## 📌 진행 단계
@@ -29,6 +31,8 @@
 
 ![혼동행렬](docs/figures/phase1_ml/confusion_matrix.png)
 
+- 🚀 **라이브 데모:** https://smartfarm-ai.streamlit.app/ — 환경값 입력 → 작물 8종 예측 (4탭: 예측·작물 가이드·모델 평가·EDA)
+
 ---
 
 ## 🗂️ 구조
@@ -37,7 +41,7 @@
 smartfarm-ai/
 ├── src/ml/        preprocess.py · train.py   (Phase 1)
 ├── src/dl/        (Phase 2 — 잎 진단 CNN, 예정)
-├── app/           Streamlit 데모 (예정)
+├── app/           phase1_ml.py — Streamlit 데모 (배포 중)
 ├── data/          데이터 (git 제외 — 포털에서 재다운)
 ├── models/        학습 모델
 └── docs/          PRD · 로드맵 · ADR · Phase 문서 · 그림

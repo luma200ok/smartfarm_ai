@@ -10,6 +10,7 @@
 | 데이터 | 농진청 스마트팜 현장 농가 데이터(2022) — 833만 시간별 → 33,278 일별 |
 | 베스트 모델 | XGBoost (test F1 0.78) |
 | 코드 | https://github.com/luma200ok/smartfarm_ai |
+| 🚀 데모 | https://smartfarm-ai.streamlit.app/ |
 | 핵심 교훈 | **데이터 누수** — 평가 방법에 따라 F1 0.77 vs 0.41 |
 
 ---
@@ -125,7 +126,7 @@ streamlit run app/phase1_ml.py
 ```
 
 - 코드: [`app/phase1_ml.py`](../app/phase1_ml.py)
-- 라이브 URL: (로컬 실행 기준 — 배포 시 기재 예정)
+- 🔗 라이브 데모: https://smartfarm-ai.streamlit.app/ (Streamlit Community Cloud 배포)
 
 ### 7.2 파이프라인 재현 노트북
 데이터 로드 → EDA → 전처리 → 모델 3종 학습·평가 → GroupKFold 교훈까지 단계별로 실행 가능.
