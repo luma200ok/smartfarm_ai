@@ -94,15 +94,15 @@
 ## 7. 단계별 범위 (Scope / 단계별 MVP)
 
 ### Phase 1 — ML (정형 센서 → 작물·환경 판단)
-- **데이터:** Kaggle Crop Recommendation (N·P·K·온도·습도·pH·강수 → 작물) — 입문용 깨끗한 CSV
-  - 대안/확장: 스마트팜코리아·공공데이터포털 시설원예 환경 CSV
-- **입력:** 토양 N·P·K, 온도, 습도, pH, 강수 → **정답:** 적합 작물(분류) / 환경 이상 여부
-- **모델:** LogisticRegression/DecisionTree → RandomForest → XGBoost (쉬운 것부터)
-- **기술:** scikit-learn, pandas
-- **📊 발표:** EDA 시각화(상관 heatmap·분포) + 모델별 정확도 비교 차트 (5장)
-- **🚀 배포:** Streamlit 데모 (슬라이더로 환경값 입력 → 작물 추천/적합도 출력)
-- **산출물:** 코드 + 발표자료 + Streamlit 앱
-- **완료 기준:** 예측 + 정확도(Accuracy/F1) 산출, EDA 완료, **Streamlit 데모 작동**
+- **데이터:** 농촌진흥청 스마트팜 현장 농가 데이터(공공데이터포털) — 시설 환경·생육·생산(8작물)
+  - 옛 노지 Kaggle Crop Recommendation은 입문 v1로 분리 → [smartfarm-ml-learn](https://github.com/luma200ok/smartfarm-ml-learn) (→ ADR-001)
+- **입력:** 일별 환경 통계(내부 온·습도·CO2·일사·온도통계) → **정답:** 작물 8종 분류
+- **모델:** LogisticRegression → RandomForest → XGBoost (베스트, test F1 0.78)
+- **기술:** scikit-learn, pandas, xgboost
+- **📊 발표:** EDA + 모델 비교 + **평가 3겹(데이터 누수 0.77→0.41 실증)** (→ [phase1_ml.md](phase1_ml.md))
+- **🚀 배포:** (선택) Streamlit — 환경값 입력 → 작물 분류
+- **산출물:** `preprocess.py`·`train.py` + `phase1_ml.md` + 그림 3종 ✅
+- **완료 기준:** ✅ 모델 비교·평가 3겹·누수 점검·포트폴리오 문서 완료
 
 ### Phase 2 — DL (시계열 + 비전) ⭐ 차별화 핵심
 > **왜 DL?** ① 환경은 순서가 중요(LSTM) ② **잎 사진은 ML로 못 읽음 → CNN 필수**. 비전이 들어와 ML→DL 점프가 진짜가 됨.
@@ -111,8 +111,8 @@
   - 입력: 지난 N시간 환경 시퀀스 → 출력: 향후 환경(온습도) 추세
   - 데이터: 스마트팜코리아 시계열 / 공공데이터 / (없으면) 가상 센서 시뮬레이션
 - **2-b 비전(CNN):**
-  - 입력: 잎 사진 → 출력: 질병 분류(건강/탄저병/잎곰팡이 등)
-  - 데이터: **PlantVillage**(Kaggle, 가입 없이 바로) / AI Hub 농작물 병해충(한국 데이터)
+  - 입력: 잎 사진 → 출력: 질병 분류(정상/잎곰팡이병/황화잎말이 등)
+  - 데이터: **PlantVillage**(즉시) → **AI Hub 시설작물 질병진단(153)**(국내) · 토마토 시작→다작물 확장
 - **기술:** PyTorch(torchvision) 또는 TensorFlow/Keras, 전이학습(ResNet 등)
 - **📊 발표:** 학습곡선 + "ML vs DL" + 혼동행렬/예측 샘플 (5장)
 - **🚀 배포:** Streamlit 확장 (Phase 1 앱에 **사진 업로드 → 병 진단** 추가)
@@ -143,7 +143,7 @@
 | 알림 | 텔레그램 봇 또는 Discord 웹훅 |
 | **배포** | **Streamlit** (전 단계 통일) → Streamlit Community Cloud(무료) or OCI 서버 |
 | **발표** | 마크다운→슬라이드(Marp) or 주피터 노트북, 단계별 5장 |
-| 데이터 | Kaggle(Crop Recommendation·PlantVillage), AI Hub, 스마트팜코리아, 농사로 |
+| 데이터 | 농진청 스마트팜(공공데이터포털), PlantVillage, AI Hub(153 질병진단·534 통합), 농사로 |
 
 ---
 
