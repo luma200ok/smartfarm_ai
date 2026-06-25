@@ -145,8 +145,15 @@ def main():
     plot_feature_importance(rf_full, f"{FIGS}/feature_importance.png")
     plot_model_compare(results, f"{FIGS}/model_compare.png")
 
-    print("[6] 베스트 모델 저장")
-    payload = {"model": best["model"], "features": FEATURES, "labels": labels, "model_name": best_name}
+    print("[6] 베스트 모델 저장 (+데모용 통계 동봉 → 배포 앱이 csv 없이 자립 동작)")
+    ranges = {f: (float(df[f].min()), float(df[f].max()), float(df[f].median())) for f in FEATURES}
+    payload = {
+        "model": best["model"], "features": FEATURES, "labels": labels, "model_name": best_name,
+        "ranges": ranges,                                  # 슬라이더 (min, max, median)
+        "crop_mean": df.groupby(TARGET)[FEATURES].mean(),  # 작물별 평균
+        "crop_min": df.groupby(TARGET)[FEATURES].min(),
+        "crop_max": df.groupby(TARGET)[FEATURES].max(),
+    }
     joblib.dump(payload, f"{MODELS}/phase1_crop_env_clf.pkl")
     print(f"  저장 → models/phase1_crop_env_clf.pkl")
 

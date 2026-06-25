@@ -24,8 +24,8 @@ docs/_local/
 *.pt
 *.pkl
 *.joblib
-# 단, Phase 1 데모 모델은 배포 앱이 런타임에 불러야 해서 예외(6.9MB)
-!models/phase1_crop_rf.pkl
+# 단, Phase 1 데모 모델은 배포 앱이 런타임에 불러야 해서 예외(슬라이더 범위·작물 통계 동봉)
+!models/phase1_crop_env_clf.pkl
 
 # OS
 .DS_Store

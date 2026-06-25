@@ -18,7 +18,6 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-DATA_PATH = ROOT / "data" / "processed" / "env_daily.csv"
 MODEL_PATH = ROOT / "models" / "phase1_crop_env_clf.pkl"
 FIG = ROOT / "docs" / "figures" / "phase1_ml"
 
@@ -46,27 +45,8 @@ def load_payload():
     return joblib.load(MODEL_PATH)
 
 
-@st.cache_data
-def load_df():
-    return pd.read_csv(DATA_PATH, encoding="utf-8-sig")
-
-
-@st.cache_data
-def get_ranges(df):
-    """각 피처의 min / max / median 계산 (슬라이더 범위·기본값 용)."""
-    return {
-        feat: (float(df[feat].min()), float(df[feat].max()), float(df[feat].median()))
-        for feat in FEATURES
-    }
-
-
-@st.cache_data
-def get_crop_stats(df):
-    """작물별 환경 피처 평균·최소·최대."""
-    mean = df.groupby("품목")[FEATURES].mean()
-    mn   = df.groupby("품목")[FEATURES].min()
-    mx   = df.groupby("품목")[FEATURES].max()
-    return mean, mn, mx
+# 슬라이더 범위·작물별 통계는 모델 pkl에 동봉돼 있다(payload["ranges"]·["crop_mean"]…).
+# → 배포 환경에 원본 csv가 없어도 데모가 자립 동작.
 
 
 # ── 공통 CSS (초록 테마) ──────────────────────────────────────────────────
@@ -91,10 +71,10 @@ def inject_css():
 
 
 # ── 탭1 🔮 예측 ──────────────────────────────────────────────────────────
-def tab_predict(payload, df):
+def tab_predict(payload):
     st.subheader("환경값을 입력하면 재배 중일 작물을 추천합니다.")
-    ranges = get_ranges(df)
-    crop_mean, _, _ = get_crop_stats(df)
+    ranges = payload["ranges"]
+    crop_mean = payload["crop_mean"]
 
     model  = payload["model"]
     labels = payload["labels"]   # sorted 작물명 리스트 — XGBoost 정수 → 이름 매핑 키
@@ -143,12 +123,12 @@ def tab_predict(payload, df):
 
 
 # ── 탭2 🌾 작물별 환경 가이드 ────────────────────────────────────────────
-def tab_guide(df):
+def tab_guide(payload):
     st.subheader("🌾 작물별 적합 환경 가이드")
     st.caption("작물을 선택하면 해당 작물의 환경 피처 평균·최소·최대를 보여줍니다.")
 
-    crop_mean, crop_min, crop_max = get_crop_stats(df)
-    crops = sorted(df["품목"].unique())
+    crop_mean, crop_min, crop_max = payload["crop_mean"], payload["crop_min"], payload["crop_max"]
+    crops = sorted(crop_mean.index.tolist())
     sel = st.selectbox("작물 선택", crops)
 
     tbl = pd.DataFrame(
@@ -240,15 +220,14 @@ def main():
     )
 
     payload = load_payload()
-    df = load_df()
 
     tab1, tab2, tab3, tab4 = st.tabs(
         ["🔮 예측", "🌾 작물별 환경 가이드", "📊 모델 평가", "📑 EDA"]
     )
     with tab1:
-        tab_predict(payload, df)
+        tab_predict(payload)
     with tab2:
-        tab_guide(df)
+        tab_guide(payload)
     with tab3:
         tab_eval(payload)
     with tab4:
