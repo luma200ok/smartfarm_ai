@@ -59,7 +59,7 @@
 - ⬜ 2-12 회고·참고문헌 → `phase2_dl.md`
 - 🏁 **Phase 2 끝 = 사진 올리면 진단+히트맵, 작물 1개씩 확장 가능한 파이프라인**
 
-> 청크 상세 = `_local/concepts/DL_concepts.md` (13청크 뼈대) · 이론 = `DL.md`.
+> 청크 상세 = `_local/concepts/DL_devlog.md` (13청크 뼈대) · 이론 = `DL.md`.
 
 ### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ⚪ 예정
 - ⬜ 3-1 Claude API 연동 (숫자·라벨 → 자연어 처방)
