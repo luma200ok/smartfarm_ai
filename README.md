@@ -4,7 +4,13 @@
 > 스마트팜 환경·잎 사진을 받아 **작물 분류 → 잎 병해충 진단 → 자연어 처방**까지 가는 멀티모달 AI.
 > 작물 **토마토 단일로 시작 → 전이학습으로 다작물 확장** (딸기·오이·참외…).
 
+[![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+![scikit-learn](https://img.shields.io/badge/scikit--learn-1.7-F7931E?logo=scikitlearn&logoColor=white)
+![XGBoost](https://img.shields.io/badge/XGBoost-3.2-1A7F37)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)
 [![Streamlit](https://img.shields.io/badge/Streamlit-라이브_데모-FF4B4B?logo=streamlit&logoColor=white)](https://smartfarm-ai.streamlit.app/)
+
+> 🚀 **라이브 데모:** [Phase 1 ML — 환경 → 작물 분류](https://smartfarm-ai.streamlit.app/) &nbsp;·&nbsp; 📄 **수행내역서:** [① ML](docs/phase1_ml.md) · [② DL](docs/phase2_dl.md) · [③ LLM](docs/phase3_llm.md)
 
 ---
 
