@@ -40,26 +40,31 @@
 - 🏁 **Phase 1 끝 = 분류 파이프라인 + 누수 교훈 보고서**
 
 ### Phase 2 — DL (비전 + 시계열) · ⭐⭐⭐⭐ ← 차별화 핵심 ▶ 다음
-**2-a 비전 (CNN) — ⭐ ML로 불가능한 새 능력 / 토마토 시작**
-- ✅ 2-1 신경망 기초(뉴런·활성화) — `src/dl/01_nn_basic.py`, "활성화 없으면 직선" 실증
-- ⬜ 2-2 학습 메커니즘 (손실·역전파·Adam)
-- ⬜ 2-3 Dataset/DataLoader · 학습 루프 골격
-- ⬜ 2-4 CNN 기초 (Conv·Pooling)
-- ⬜ 2-5 전이학습 — **여러 백본 비교**(ResNet/EfficientNet), 토마토 잎 진단
-- ⬜ 2-6 **Grad-CAM** (설명가능 AI — 어느 병반을 보고 판단했나)
-- ⬜ 2-7 과적합·불균형·학습안정 (Dropout·클래스가중치·LR스케줄러)
-- ⬜ 2-9 평가 심화 (혼동행렬·ROC/AUC·오분류 분석)
+> **ML 5스텝처럼 DL도 4스텝**: 기초 → 핵심 → 평가 → 데모. (`2-N`=불변 ID, 묶음=스텝)
 
-**2-b 시계열 (LSTM)**
+**STEP 1 · 기초 — 신경망 원리 (forward → 학습 → 데이터 파이프)**
+- ✅ 2-0 환경·PyTorch 첫걸음 (설치·MPS 확인)
+- ✅ 2-1 신경망 기초(뉴런·활성화) — `src/dl/01_nn_basic.py`, "활성화 없으면 직선" 실증
+- ✅ 2-2 학습 메커니즘(손실·역전파·Adam) — `src/dl/02_train_loop.py`
+- ▶ 2-3 Dataset/DataLoader · 학습 루프 골격 — `src/dl/03_dataloader.py`
+
+**STEP 2 · 핵심 — 모델 구축 ⭐ (비전 + 시계열)**
+- ⬜ 2-4 CNN 기초 (Conv·Pooling)
+- ⬜ 2-5 전이학습 — **여러 백본 비교**(ResNet/EfficientNet), 토마토 잎 진단 ⭐
+- ⬜ 2-6 **Grad-CAM** (설명가능 AI — 어느 병반을 보고 판단했나) ⭐
 - ⬜ 2-8 LSTM — 환경 시계열 추세(+이상탐지)
 
-**2-c 마무리**
+**STEP 3 · 평가 — 강건화·검증**
+- ⬜ 2-7 과적합·불균형·학습안정 (Dropout·클래스가중치·LR스케줄러)
+- ⬜ 2-9 평가 심화 (혼동행렬·ROC/AUC·오분류 FN 분석)
+
+**STEP 4 · 데모 — 배포·마무리**
 - ⬜ 2-10 모델 저장(.pt) + Streamlit (사진 업로드 → 진단 + Grad-CAM)
 - ⬜ 2-11 (고급/선택) YOLO 병반 위치 검출
 - ⬜ 2-12 회고·참고문헌 → `phase2_dl.md`
 - 🏁 **Phase 2 끝 = 사진 올리면 진단+히트맵, 작물 1개씩 확장 가능한 파이프라인**
 
-> 청크 상세 = `_local/concepts/DL_devlog.md` (13청크 뼈대) · 이론 = `DL.md`.
+> 청크 상세 = `_local/concepts/DL_devlog.md` · 이론 = `DL.md`.
 
 ### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ⚪ 예정
 - ⬜ 3-1 Claude API 연동 (숫자·라벨 → 자연어 처방)
