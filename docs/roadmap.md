@@ -42,11 +42,11 @@
 ### Phase 2 — DL (비전 + 시계열) · ⭐⭐⭐⭐ ← 차별화 핵심 ▶ 다음
 > **ML 5스텝처럼 DL도 4스텝**: 기초 → 핵심 → 평가 → 데모. (`2-N`=불변 ID, 묶음=스텝)
 
-**STEP 1 · 기초 — 신경망 원리 (forward → 학습 → 데이터 파이프)**
+**STEP 1 · 기초 — 신경망 원리 (forward → 학습 → 데이터 파이프)** — `01_basics.py`
 - ✅ 2-0 환경·PyTorch 첫걸음 (설치·MPS 확인)
-- ✅ 2-1 신경망 기초(뉴런·활성화) — `src/dl/01_nn_basic.py`, "활성화 없으면 직선" 실증
-- ✅ 2-2 학습 메커니즘(손실·역전파·Adam) — `src/dl/02_train_loop.py`
-- ▶ 2-3 Dataset/DataLoader · 학습 루프 골격 — `src/dl/03_dataloader.py`
+- ✅ 2-1 신경망 기초(뉴런·활성화) — "활성화 없으면 직선" 실증
+- ✅ 2-2 학습 메커니즘(손실·역전파·Adam) — 5단계 루프
+- ✅ 2-3 Dataset/DataLoader · batch 학습 골격 — make_moons 곡선 결정경계 + mini vs full 비교
 
 **STEP 2 · 핵심 — 모델 구축 ⭐ (비전 + 시계열)** — `02_core.py`
 - ✅ 2-4 CNN 기초 (Conv·Pooling) — FashionMNIST acc 0.87
