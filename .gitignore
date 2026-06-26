@@ -35,3 +35,7 @@ docs/_local/
 
 # 브라우저 자동화(Playwright MCP) 잔여물
 .playwright-mcp/
+
+# Phase2 DL 산출물(대용량/캐시)
+data/torchvision/
+data/tomato/
