@@ -3,7 +3,8 @@ Phase 2 (DL) — Streamlit 데모: 토마토 잎 사진 → 진단(+Grad-CAM) ·
 
 탭1 진단: resnet18(전이학습) 추론 → 정상/질병 + '어디를 보고 판단했나' Grad-CAM 히트맵
 탭2 검출: YOLOv8n → 장면에서 잎을 찾아 박스 + 정상/질병 라벨 + 신뢰도
-실행: streamlit run app/phase2_dl.py   (프로젝트 루트에서)
+멀티페이지: app/streamlit_app.py 가 render() 를 호출(set_page_config 는 엔트리에서 1회).
+단독 실행: streamlit run app/phase2_dl.py   (프로젝트 루트에서)
 
 모델: models/tomato_resnet18.pt (진단) · models/tomato_yolov8n.pt (검출)
   없으면 → prepare_tomato.py → 02_core.py --chunk 2-5 / prepare_tomato_yolo.py → 05_detect.py
@@ -99,61 +100,68 @@ def detect(yolo, pil, conf=0.25):
     return annotated, dets
 
 
-st.set_page_config(page_title="토마토 잎 진단 (Phase 2 DL)", page_icon="🍅")
-st.title("🍅 토마토 잎 병해 — 진단(Grad-CAM) · 위치 검출(YOLO)")
-st.caption("ML로는 불가능한 '사진 진단' + 설명가능 AI(어느 병반을 보고 판단했나) + 장면 속 잎 위치 검출")
+# ── 페이지 렌더 (멀티페이지 엔트리가 호출) ───────────────────────────────────
+def render():
+    st.title("🍅 토마토 잎 병해 — 진단(Grad-CAM) · 위치 검출(YOLO)")
+    st.caption("ML로는 불가능한 '사진 진단' + 설명가능 AI(어느 병반을 보고 판단했나) + 장면 속 잎 위치 검출")
 
-tab_diag, tab_detect = st.tabs(["🔬 진단 + Grad-CAM", "🎯 위치 검출 (YOLO)"])
+    tab_diag, tab_detect = st.tabs(["🔬 진단 + Grad-CAM", "🎯 위치 검출 (YOLO)"])
 
-# ── 탭 1: 분류 진단 + Grad-CAM ──
-with tab_diag:
-    if not CKPT.exists():
-        st.error(f"진단 모델이 없습니다: {CKPT}\n\n터미널에서 먼저 실행하세요:\n"
-                 "1) `python src/dl/prepare_tomato.py`\n"
-                 "2) `python src/dl/02_core.py --chunk 2-5`")
-    else:
-        model = load_model()
-        up = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="diag")
-        if up:
-            pil = Image.open(up)
-            label, prob, probs, cam, img = predict_with_cam(model, pil)
-
-            st.subheader(f"진단: {LABEL_KR[label]}  (확률 {prob:.1%})")
-            if label != "normal":
-                st.warning(f"{LABEL_KR[label]}이(가) 의심됩니다. 오른쪽 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
-            else:
-                st.success("정상으로 판단됩니다.")
-
-            c1, c2 = st.columns(2)
-            c1.image(img, caption="입력(224×224)", use_container_width=True)
-            c2.image(overlay(img, cam), caption="Grad-CAM — 판단 근거 영역", use_container_width=True)
-
-            st.markdown("**클래스별 확률**")
-            st.bar_chart({c: float(p) for c, p in zip([LABEL_KR[c] for c in CLASSES], probs)})
-            st.caption("⚠️ Grad-CAM은 보조 지표 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요합니다.")
+    # ── 탭 1: 분류 진단 + Grad-CAM ──
+    with tab_diag:
+        if not CKPT.exists():
+            st.error(f"진단 모델이 없습니다: {CKPT}\n\n터미널에서 먼저 실행하세요:\n"
+                     "1) `python src/dl/prepare_tomato.py`\n"
+                     "2) `python src/dl/02_core.py --chunk 2-5`")
         else:
-            st.info("잎 사진을 업로드하면 진단 결과와 Grad-CAM 히트맵이 표시됩니다.")
+            model = load_model()
+            up = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="diag")
+            if up:
+                pil = Image.open(up)
+                label, prob, probs, cam, img = predict_with_cam(model, pil)
 
-# ── 탭 2: YOLO 위치 검출 ──
-with tab_detect:
-    if not YOLO_CKPT.exists():
-        st.error(f"검출 모델이 없습니다: {YOLO_CKPT}\n\n터미널에서 먼저 실행하세요:\n"
-                 "1) `python src/dl/prepare_tomato_yolo.py`\n"
-                 "2) `python src/dl/05_detect.py`")
-    else:
-        yolo = load_yolo()
-        up2 = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="detect")
-        conf = st.slider("신뢰도 임계값(conf)", 0.05, 0.9, 0.25, 0.05)
-        if up2:
-            pil2 = Image.open(up2)
-            annotated, dets = detect(yolo, pil2, conf=conf)
-            st.image(annotated, caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도",
-                     use_container_width=True)
-            if dets:
-                st.subheader(f"검출 {len(dets)}건")
-                for lab, c in dets:
-                    st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
+                st.subheader(f"진단: {LABEL_KR[label]}  (확률 {prob:.1%})")
+                if label != "normal":
+                    st.warning(f"{LABEL_KR[label]}이(가) 의심됩니다. 오른쪽 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
+                else:
+                    st.success("정상으로 판단됩니다.")
+
+                c1, c2 = st.columns(2)
+                c1.image(img, caption="입력(224×224)", use_container_width=True)
+                c2.image(overlay(img, cam), caption="Grad-CAM — 판단 근거 영역", use_container_width=True)
+
+                st.markdown("**클래스별 확률**")
+                st.bar_chart({c: float(p) for c, p in zip([LABEL_KR[c] for c in CLASSES], probs)})
+                st.caption("⚠️ Grad-CAM은 보조 지표 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요합니다.")
             else:
-                st.info("임계값 이상으로 검출된 잎이 없습니다. conf 슬라이더를 낮춰 보세요.")
+                st.info("잎 사진을 업로드하면 진단 결과와 Grad-CAM 히트맵이 표시됩니다.")
+
+    # ── 탭 2: YOLO 위치 검출 ──
+    with tab_detect:
+        if not YOLO_CKPT.exists():
+            st.error(f"검출 모델이 없습니다: {YOLO_CKPT}\n\n터미널에서 먼저 실행하세요:\n"
+                     "1) `python src/dl/prepare_tomato_yolo.py`\n"
+                     "2) `python src/dl/05_detect.py`")
         else:
-            st.info("잎 사진을 업로드하면 잎 위치 박스와 정상/질병 라벨이 표시됩니다.")
+            yolo = load_yolo()
+            up2 = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="detect")
+            conf = st.slider("신뢰도 임계값(conf)", 0.05, 0.9, 0.25, 0.05)
+            if up2:
+                pil2 = Image.open(up2)
+                annotated, dets = detect(yolo, pil2, conf=conf)
+                st.image(annotated, caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도",
+                         use_container_width=True)
+                if dets:
+                    st.subheader(f"검출 {len(dets)}건")
+                    for lab, c in dets:
+                        st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
+                else:
+                    st.info("임계값 이상으로 검출된 잎이 없습니다. conf 슬라이더를 낮춰 보세요.")
+            else:
+                st.info("잎 사진을 업로드하면 잎 위치 박스와 정상/질병 라벨이 표시됩니다.")
+
+
+if __name__ == "__main__":
+    # 단독 실행 시에만 페이지 설정(멀티페이지에선 엔트리가 담당)
+    st.set_page_config(page_title="토마토 잎 진단 (Phase 2 DL)", page_icon="🍅")
+    render()

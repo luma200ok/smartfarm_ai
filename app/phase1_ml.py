@@ -2,7 +2,8 @@
 Phase 1 (ML) — Streamlit 데모: 환경 센서 → 재배 작물 9종 분류 (2022~2024 다년)
 
 흐름: 슬라이더 입력 → 저장된 XGBoost 묶음(.pkl) 로드 → 예측(정수→작물명 매핑) → 결과 표시
-실행: streamlit run app/phase1_ml.py  (프로젝트 루트에서)
+멀티페이지: app/streamlit_app.py 가 render() 를 호출(set_page_config 는 엔트리에서 1회).
+단독 실행: streamlit run app/phase1_ml.py  (프로젝트 루트에서)
 
 ⚠️ XGBoost는 LabelEncoder로 인코딩된 정수 y로 학습됨.
    predict() → 정수 인덱스 → payload["labels"][idx] 로 작물명 변환 필수.
@@ -216,9 +217,8 @@ def tab_eda():
             st.warning(f"{fname} 파일 없음 — `python src/ml/eda.py` 먼저 실행하세요.")
 
 
-# ── 메인 ─────────────────────────────────────────────────────────────────
-def main():
-    st.set_page_config(page_title="스마트팜 작물 추천 (Phase 1 ML)", page_icon="🌱", layout="wide")
+# ── 페이지 렌더 (멀티페이지 엔트리가 호출) ───────────────────────────────────
+def render():
     inject_css()
 
     st.title("🌱 스마트팜 작물 분류 데모 — Phase 1 ML")
@@ -243,4 +243,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # 단독 실행 시에만 페이지 설정(멀티페이지에선 엔트리가 담당)
+    st.set_page_config(page_title="스마트팜 작물 추천 (Phase 1 ML)", page_icon="🌱", layout="wide")
+    render()

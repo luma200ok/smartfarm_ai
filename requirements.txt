@@ -11,17 +11,18 @@ ipykernel
 ydata-profiling
 setuptools<81          # ydata-profiling 4.18.x가 pkg_resources 사용 (setuptools 81+에서 제거됨)
 
-# Streamlit 데모
-streamlit
+# Streamlit 데모 (멀티페이지 st.navigation 사용 → 1.36+ 필수)
+streamlit>=1.40
 
 # 노트북 빌드·실행 (src/ml/build_notebook.py)
 nbformat
 jupyter
 
-# --- Phase 2 — DL (Apple Silicon: MPS 가속 자동 지원) ---
-torch
-torchvision
-ultralytics            # YOLOv8 병해 잎 위치 검출 (src/dl/05_detect.py · 청크 2-11)
+# --- Phase 2 — DL (Apple Silicon: MPS / OCI ARM(aarch64): CPU 휠 자동) ---
+# aarch64에선 `pip install torch`가 CPU 빌드를 자동 설치 → 별도 index 불필요
+torch>=2.2
+torchvision>=0.17
+ultralytics>=8.3        # YOLOv8 병해 잎 위치 검출 (src/dl/05_detect.py · 청크 2-11)
 
 # --- Phase 3 — LLM (새 세션에서 주석 해제) ---
 # anthropic
