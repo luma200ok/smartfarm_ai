@@ -1,0 +1,32 @@
+name: deploy
+
+# main에 push되면 → 문법 검사(CI) 통과 후 → 서버 SSH 배포(CD)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:        # 수동 실행도 허용
+
+jobs:
+  ci:
+    name: 문법 검사
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: py_compile (app 깨짐 차단)
+        run: python -m py_compile app/*.py
+
+  deploy:
+    name: 서버 배포
+    needs: ci                # CI 통과해야 배포
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 배포 실행
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: bash /opt/smartfarm_ai/deploy/deploy.sh
