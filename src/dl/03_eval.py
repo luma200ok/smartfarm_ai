@@ -42,6 +42,7 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
+# ── (공용) ResNet18 백본 빌드 ──
 def _build_resnet18(n_classes=2):
     """2-5와 동일한 방식: ImageNet 백본 freeze + head 교체."""
     from torchvision import models
@@ -52,6 +53,7 @@ def _build_resnet18(n_classes=2):
     return m
 
 
+# ── (공용) 이미지 전처리 변환 ──
 def _transforms():
     from torchvision import transforms
     return transforms.Compose([
@@ -60,6 +62,7 @@ def _transforms():
         transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
 
+# ── (공용) 헤드 학습 루프 ──
 def _train_head(model, loader, weight=None, epochs=2):
     crit = nn.CrossEntropyLoss(weight=weight.to(device) if weight is not None else None)
     opt = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=1e-3)
@@ -79,6 +82,7 @@ def _train_head(model, loader, weight=None, epochs=2):
 #   ② 가중치 없이 vs CrossEntropyLoss(weight=클래스역빈도) 두 모델 학습
 #   ③ 소수클래스(질병) recall 비교 → 가중치가 '놓친 질병'을 줄이는지 실증
 # ════════════════════════════════════════════════════════════════════
+# ── (보조) 클래스별 recall 계산 ──
 def _per_class_recall(model, loader, n_classes=2):
     model.eval()
     hit = np.zeros(n_classes); tot = np.zeros(n_classes)
@@ -92,6 +96,7 @@ def _per_class_recall(model, loader, n_classes=2):
     return hit / np.maximum(tot, 1)
 
 
+# ── (실행) 불균형 대응: 클래스 가중치 효과를 소수클래스 recall 로 실증 (3분류) ──
 def run_chunk_2_7():
     print("\n" + "═" * 64 + "\n청크 2-7 · 과적합·불균형·학습안정 대응\n" + "═" * 64)
     if not os.path.isdir(f"{TOMATO}/train"):
@@ -102,27 +107,29 @@ def run_chunk_2_7():
     tf = _transforms()
     train_full = datasets.ImageFolder(f"{TOMATO}/train", tf)
     val_ds = datasets.ImageFolder(f"{TOMATO}/val", tf)
-    classes = train_full.classes
-    dis = classes.index("disease")
+    classes = train_full.classes                       # ['leaf_mold','normal','tylcv']
+    normal_i = classes.index("normal")
+    disease_is = [c for c in range(len(classes)) if c != normal_i]   # 소수 질병 2종
     targets = np.array(train_full.targets)
 
-    # ① 인위적 불균형: 정상 전부 + 질병 1/3 만 (소수클래스 상황 연출)
+    # ① 인위적 불균형: 정상 전부 + 각 질병 1/3 만 (소수클래스 상황 연출)
     rng = np.random.default_rng(0)
-    normal_idx = np.where(targets != dis)[0]
-    disease_idx = np.where(targets == dis)[0]
-    dis_few = rng.choice(disease_idx, max(len(disease_idx) // 3, 5), replace=False)
-    imb_idx = np.concatenate([normal_idx, dis_few])
+    keep = list(np.where(targets == normal_i)[0])
+    for di in disease_is:
+        idx = np.where(targets == di)[0]
+        keep += list(rng.choice(idx, max(len(idx) // 3, 5), replace=False))
+    imb_idx = np.array(keep)
     imb_ds = Subset(train_full, imb_idx)
-    n_normal, n_dis = len(normal_idx), len(dis_few)
-    print(f"\n[①] 불균형 train: 정상 {n_normal} : 질병 {n_dis}  (비율 {n_normal/max(n_dis,1):.1f}:1)")
+    counts = np.array([(targets[imb_idx] == c).sum() for c in range(len(classes))], dtype=float)
+    print("\n[①] 불균형 train 분포: " +
+          ", ".join(f"{classes[c]}={int(counts[c])}" for c in range(len(classes))))
 
     loader = DataLoader(imb_ds, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=32)
 
     # 클래스 역빈도 가중치 (적은 클래스에 큰 가중치)
-    counts = np.array([n_dis if c == dis else n_normal for c in range(len(classes))], dtype=float)
-    weight = torch.tensor((counts.sum() / counts) / (counts.sum() / counts).sum() * len(classes),
-                          dtype=torch.float32)
+    inv = counts.sum() / counts
+    weight = torch.tensor(inv / inv.sum() * len(classes), dtype=torch.float32)
 
     # ② 두 모델 학습
     print("\n[②] 가중치 없이 vs 클래스 가중치")
@@ -133,26 +140,27 @@ def run_chunk_2_7():
         model = _train_head(model, loader, weight=w, epochs=2)
         rec = _per_class_recall(model, val_loader, len(classes))
         results[tag] = rec
-        print(f"  {tag}: recall(정상)={rec[1-dis]:.3f}  recall(질병)={rec[dis]:.3f}")
+        print(f"  {tag}: " + ", ".join(f"{classes[c]} recall={rec[c]:.2f}" for c in range(len(classes))))
 
-    # ③ 질병 recall 비교 그림
-    fig, ax = plt.subplots(figsize=(6.5, 4.5))
+    # ③ 소수 질병 2종 recall 비교 그림 (가중치 X vs O)
+    fig, ax = plt.subplots(figsize=(7, 4.5))
     tags = list(results.keys())
-    dis_rec = [results[t][dis] for t in tags]
-    nor_rec = [results[t][1 - dis] for t in tags]
-    x = np.arange(len(tags)); w_ = 0.35
-    ax.bar(x - w_/2, dis_rec, w_, label="질병 recall (소수)", color="#e45756")
-    ax.bar(x + w_/2, nor_rec, w_, label="정상 recall (다수)", color="#4c78a8")
-    ax.set_xticks(x); ax.set_xticklabels(tags); ax.set_ylim(0, 1.05)
-    ax.set_ylabel("recall"); ax.set_title("클래스 가중치 효과 — 소수클래스(질병) 놓침 줄이기")
+    x = np.arange(len(disease_is)); w_ = 0.35
+    colors = ["#bbbbbb", "#e45756"]
+    for k, tag in enumerate(tags):
+        vals = [results[tag][di] for di in disease_is]
+        ax.bar(x + (k - 0.5) * w_, vals, w_, label=tag, color=colors[k])
+        for xi, v in zip(x, vals):
+            ax.text(xi + (k - 0.5) * w_, v + 0.02, f"{v:.2f}", ha="center", fontsize=9)
+    ax.set_xticks(x); ax.set_xticklabels([classes[di] for di in disease_is])
+    ax.set_ylim(0, 1.05); ax.set_ylabel("recall (놓치지 않은 비율)")
+    ax.set_title("클래스 가중치 효과 — 소수 질병(잎곰팡이·황화잎말이) 놓침 줄이기")
     ax.legend()
-    for i, v in enumerate(dis_rec):
-        ax.text(i - w_/2, v + 0.02, f"{v:.2f}", ha="center", fontsize=10)
     fig.tight_layout()
     path = f"{FIGS}/07_imbalance.png"
     fig.savefig(path, dpi=120, bbox_inches="tight"); plt.close(fig)
     print(f"\n[③] 그림 저장 → {path}")
-    print("  가중치를 주면 소수클래스(질병)에 손실을 더 크게 매겨 → 질병 recall(놓친 병 ↓) 개선.")
+    print("  가중치를 주면 소수 질병에 손실을 더 크게 매겨 → 질병 recall(놓친 병 ↓) 개선.")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -161,6 +169,7 @@ def run_chunk_2_7():
 #   ② ROC 곡선·AUC (이진분류 임계값 전반의 성능)
 #   ③ 오분류, 특히 FN(질병을 정상으로 놓침) 사례를 눈으로
 # ════════════════════════════════════════════════════════════════════
+# ── (실행) 평가 심화: 혼동행렬 · ROC/AUC · 오분류(FN) 사례 ──
 def run_chunk_2_9():
     print("\n" + "═" * 64 + "\n청크 2-9 · 평가 심화 (혼동행렬·ROC/AUC·FN)\n" + "═" * 64)
     ckpt = f"{MODELS}/tomato_resnet18.pt"
@@ -172,30 +181,30 @@ def run_chunk_2_9():
 
     tf = _transforms()
     val_ds = datasets.ImageFolder(f"{TOMATO}/val", tf)
-    classes = val_ds.classes
-    dis = classes.index("disease")
+    classes = val_ds.classes                          # ['leaf_mold','normal','tylcv']
+    normal_i = classes.index("normal")
     loader = DataLoader(val_ds, batch_size=32)
 
     model = _build_resnet18(len(classes))
     model.load_state_dict(torch.load(ckpt, map_location=device))
     model.eval().to(device)
 
-    # 전체 예측 + 질병 확률 수집
+    # 전체 예측 + '질병(어느 것이든) 확률' = 1 - P(정상) 수집
     y_true, y_pred, p_dis = [], [], []
     with torch.no_grad():
         for xb, yb in loader:
             prob = torch.softmax(model(xb.to(device)), dim=1).cpu().numpy()
-            y_pred.extend(prob.argmax(1)); p_dis.extend(prob[:, dis]); y_true.extend(yb.numpy())
+            y_pred.extend(prob.argmax(1)); p_dis.extend(1 - prob[:, normal_i]); y_true.extend(yb.numpy())
     y_true, y_pred, p_dis = np.array(y_true), np.array(y_pred), np.array(p_dis)
 
-    print("\n[①] classification report")
+    print("\n[①] classification report (3분류)")
     print(classification_report(y_true, y_pred, target_names=classes, zero_division=0))
 
     cm = confusion_matrix(y_true, y_pred)
-    # ROC (질병=양성)
-    fpr, tpr, _ = roc_curve(y_true == dis, p_dis)
+    # ROC: 양성 = '질병(잎곰팡이 or 황화잎말이)', 음성 = 정상  → 질병 검출력
+    fpr, tpr, _ = roc_curve(y_true != normal_i, p_dis)
     roc_auc = auc(fpr, tpr)
-    print(f"[②] ROC-AUC(질병 양성) = {roc_auc:.3f}")
+    print(f"[②] ROC-AUC(질병 vs 정상) = {roc_auc:.3f}")
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     im = ax1.imshow(cm, cmap="Blues")
@@ -209,14 +218,14 @@ def run_chunk_2_9():
     ax2.plot(fpr, tpr, lw=2, color="#e45756", label=f"AUC = {roc_auc:.3f}")
     ax2.plot([0, 1], [0, 1], ls="--", color="gray")
     ax2.set_xlabel("FPR"); ax2.set_ylabel("TPR(질병 검출률)")
-    ax2.set_title("ROC 곡선 (질병=양성)"); ax2.legend(); ax2.grid(alpha=0.3)
+    ax2.set_title("ROC 곡선 (질병 vs 정상)"); ax2.legend(); ax2.grid(alpha=0.3)
     fig.tight_layout()
     path = f"{FIGS}/09_eval.png"
     fig.savefig(path, dpi=120, bbox_inches="tight"); plt.close(fig)
     print(f"  혼동행렬·ROC 그림 저장 → {path}")
 
     # ③ FN(질병을 정상으로 놓침) 사례 — 농업에선 가장 위험한 오류
-    fn_idx = np.where((y_true == dis) & (y_pred != dis))[0]
+    fn_idx = np.where((y_true != normal_i) & (y_pred == normal_i))[0]
     print(f"\n[③] FN(놓친 질병) {len(fn_idx)}건", end="")
     if len(fn_idx):
         show = fn_idx[:3]

@@ -32,15 +32,16 @@
 ### Phase 1 — ML (환경 → 작물 8종 분류) · ⭐ ✅ 완료
 - ✅ 1-1 레포 분리 + 농진청 데이터 확보
 - ✅ 1-2 EDA (작물 분포·농가-작물 관계·센서 결측)
-- ✅ 1-3 전처리 `preprocess.py` (833만 시간별 → 33,278 일별 집계)
-- ✅ 1-4 모델 비교 `train.py` (로지스틱·RF·XGBoost) → XGBoost 베스트(F1 0.78)
-- ✅ 1-5 평가 3겹 — **데이터 누수 실증**(랜덤 0.77 vs GroupKFold 0.41)
+- ✅ 1-3 전처리 `preprocess.py` (288만 시간별 → 116,365 일별 집계, **2022~24 다년**)
+- ✅ 1-4 모델 비교 `train.py` (로지스틱·RF·XGBoost) → XGBoost 베스트(test F1 0.68 · GKF 0.49)
+- ✅ 1-5 평가 3겹 — **데이터 누수 실증**(랜덤 0.67 vs GroupKFold 0.49)
 - ✅ 1-6 포트폴리오 `phase1_ml.md` + 그림 3종
+- ✅ 1-7 **다년 결합(2022~24)** — `compare_years.py` 데이터 양 효과(공통 8작물 F1 +0.073) + 수박 신규 커버
 - ⬜ (선택) Streamlit 데모 — "환경만으로 작물 식별 한계" 시연
 - 🏁 **Phase 1 끝 = 분류 파이프라인 + 누수 교훈 보고서**
 
-### Phase 2 — DL (비전 + 시계열) · ⭐⭐⭐⭐ ← 차별화 핵심 ▶ 다음
-> **ML 5스텝처럼 DL도 4스텝**: 기초 → 핵심 → 평가 → 데모. (`2-N`=불변 ID, 묶음=스텝)
+### Phase 2 — DL (비전 + 시계열) · ⭐⭐⭐⭐ ← 차별화 핵심 ✅ 완료
+> **ML 5스텝처럼 DL도 4스텝 + 검출(고급)**: 기초 → 핵심 → 평가 → 데모 → 검출. (`2-N`=불변 ID, 묶음=스텝)
 
 **STEP 1 · 기초 — 신경망 원리 (forward → 학습 → 데이터 파이프)** — `01_basics.py`
 - ✅ 2-0 환경·PyTorch 첫걸음 (설치·MPS 확인)
@@ -50,19 +51,21 @@
 
 **STEP 2 · 핵심 — 모델 구축 ⭐ (비전 + 시계열)** — `02_core.py`
 - ✅ 2-4 CNN 기초 (Conv·Pooling) — FashionMNIST acc 0.87
-- ✅ 2-5 전이학습 — **여러 백본 비교**(resnet18 0.94 vs mobilenet_v2 0.95), 토마토 잎 진단 ⭐
+- ✅ 2-5 전이학습 — **여러 백본 비교**(resnet18·mobilenet_v2 둘 다 0.938), 토마토 잎 **3분류**(정상·잎곰팡이·황화잎말이) ⭐
 - ✅ 2-6 **Grad-CAM** (설명가능 AI — 어느 병반을 보고 판단했나) ⭐
-- ✅ 2-8 LSTM — 환경 시계열 (내부온도 예측 MAE 1.2℃)
+- ✅ 2-8 LSTM — 환경 **다변량 8변수·198개 시계열** 통합 (MAE 1.22℃ < baseline 1.27℃)
 
 **STEP 3 · 평가 — 강건화·검증** — `03_eval.py`
-- ✅ 2-7 과적합·불균형·학습안정 (클래스가중치 → 질병 recall 0.10→0.82)
-- ✅ 2-9 평가 심화 (혼동행렬·ROC/AUC 0.97·오분류 FN 분석)
+- ✅ 2-7 과적합·불균형·학습안정 (클래스가중치 → 소수 질병 recall 0.2→0.9)
+- ✅ 2-9 평가 심화 (3×3 혼동행렬·ROC/AUC 0.99·오분류 FN 분석)
 
 **STEP 4 · 데모 — 배포·마무리** — `04_demo.py` · `app/phase2_dl.py`
 - ✅ 2-10 모델 저장(.pt) + Streamlit (사진 업로드 → 진단 + Grad-CAM)
-- ⬜ 2-11 (고급/선택) YOLO 병반 위치 검출
-- ✅ 2-12 회고 (코드 회고 완료 · 정식 `phase2_dl.md` 작성은 예정)
-- 🏁 **Phase 2 끝 = 사진 올리면 진단+히트맵, 작물 1개씩 확장 가능한 파이프라인**
+- ✅ 2-12 회고 (코드 회고 완료 · 정식 `phase2_dl.md` 수행내역서 작성 완료)
+
+**STEP 5 · 검출(고급) — YOLO 위치 검출** — `prepare_tomato_yolo.py` · `05_detect.py`
+- ✅ 2-11 YOLO 병해 잎 위치 검출 (YOLOv8n 전이학습, **3클래스** normal/leaf_mold/tylcv, **mAP@50 0.78**) ⭐
+- 🏁 **Phase 2 끝 = 사진 올리면 진단+히트맵+위치박스, 작물 1개씩 확장 가능한 파이프라인**
 
 > 청크 상세 = `_local/concepts/DL_devlog.md` · 이론 = `DL.md`.
 
@@ -77,13 +80,13 @@
 
 ## 📅 Phase별 데이터·기술 요약
 
-| | Phase 1 (ML) ✅ | Phase 2 (DL) ▶ | Phase 3 (LLM) ⚪ |
+| | Phase 1 (ML) ✅ | Phase 2 (DL) ✅ | Phase 3 (LLM) ▶ |
 |---|---|---|---|
 | **목표** | 환경 → 작물 분류 | 잎 진단 + 환경 예측 | 말로 처방+알림 |
 | **모달리티** | 정형 센서 | + 이미지 | + 언어 |
 | **데이터** | 농진청 스마트팜 현장 농가 | AI Hub 153·PlantVillage·534 | 진단+예측+농사로 RAG |
 | **핵심 기술** | scikit-learn·XGBoost | PyTorch·전이학습·Grad-CAM | Claude API·RAG |
-| **결과물** | 분류 모델(F1 0.78) | 진단 모델(.pt) | 📱 처방 알림 |
+| **결과물** | 분류 모델(test F1 0.68·GKF 0.49) | 진단 모델(.pt) | 📱 처방 알림 |
 | **배포** | (선택) Streamlit | Streamlit 진단 데모 | 대시보드+알림봇 |
 
 > 데이터 출처 상세 → [data_sources.md](data_sources.md) · 데이터 맵 → [decisions.md 📦](decisions.md).
@@ -97,7 +100,7 @@
 - **Phase 2 병진단:** PlantVillage(즉시) → AI Hub 153(국내) · ADR-005
 - **DL 프레임워크:** PyTorch (MPS) · **알림:** 텔레그램
 
-## ✅ 다음 액션 (Phase 2 DL 시작)
-1. 153 토마토 데이터(14GB) 다운 완료 → `data/images/` (외장하드)
-2. 청크 2-1(신경망 기초)부터 → `src/dl/`
-3. 전이학습으로 토마토 진단 파이프라인 완성 → 작물 확장
+## ✅ 다음 액션 (Phase 3 LLM 시작)
+- Phase 2 DL 완료: 3분류(CNN val 0.94)+설명(Grad-CAM)+검출(YOLO mAP@50 0.78)+다변량 시계열(LSTM MAE 1.22℃<baseline) · 수행내역서 `phase2_dl.md`
+1. 청크 3-1(LLM 기초·프롬프트)부터 → `src/llm/`
+2. CNN 진단 + LSTM 예측 + RAG 재배가이드 → 자연어 처방 통합 파이프라인

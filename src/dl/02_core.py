@@ -53,6 +53,7 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 #   ② Pooling = 특징맵을 절반으로 줄여 계산↓·위치 약간 무시
 #   ③ Conv→Pool 쌓고 마지막에 FC → 10종 분류 + 특징맵 눈으로 확인
 # ════════════════════════════════════════════════════════════════════
+# ── ① CNN 모델 정의: Conv·Pool 2겹 + FC ──
 class SmallCNN(nn.Module):
     """28×28 흑백 → 10클래스. Conv 2겹 + Pool 2번 + FC 1개."""
     def __init__(self, n_classes=10):
@@ -69,6 +70,7 @@ class SmallCNN(nn.Module):
         return self.fc(x)
 
 
+# ── ② 학습·특징맵 시각화 실행 ──
 def run_chunk_2_4():
     print("\n" + "═" * 64 + "\n청크 2-4 · CNN 기초 (Conv·Pooling)\n" + "═" * 64)
     from torchvision import datasets, transforms
@@ -130,6 +132,7 @@ def run_chunk_2_4():
 #   ② 마지막 분류기(head)만 우리 2클래스로 교체해 학습 → 적은 데이터로 고성능
 #   ③ resnet18 vs mobilenet_v2 비교 → 같은 데이터에 어느 백본이 유리한가
 # ════════════════════════════════════════════════════════════════════
+# ── ① 백본 준비: 사전학습 모델 호출 → 몸통 freeze → 머리(분류기) 교체 ──
 def _build_backbone(name, n_classes=2):
     """사전학습 백본을 가져와 backbone 은 얼리고(head 만 학습) 분류기를 교체."""
     from torchvision import models
@@ -148,6 +151,7 @@ def _build_backbone(name, n_classes=2):
     return m
 
 
+# ── ② 데이터 준비: 토마토 사진을 224 크기·정규화로 가공해 공급(교재 준비) ──
 def _tomato_loaders(batch=32):
     from torchvision import datasets, transforms
     tf_train = transforms.Compose([
@@ -166,6 +170,7 @@ def _tomato_loaders(batch=32):
             train_ds.classes)
 
 
+# ── ③ 학습: freeze 된 몸통 위에서 머리(head)만 학습 ──
 def _train_head(model, train_loader, val_loader, epochs=3):
     """freeze 된 backbone 위에서 head 만 학습. (val 정확도 반환)"""
     crit = nn.CrossEntropyLoss()
@@ -183,6 +188,7 @@ def _train_head(model, train_loader, val_loader, epochs=3):
     return acc
 
 
+# ── (보조) 정확도 측정: 시험모드로 val/test 정확도 계산 ──
 def _eval_acc(model, loader):
     model.eval()
     correct = total = 0
@@ -193,6 +199,7 @@ def _eval_acc(model, loader):
     return correct / max(total, 1)
 
 
+# ── ④ 실행: 두 백본(resnet18·mobilenet_v2)을 같은 데이터로 학습→비교 ──
 def run_chunk_2_5():
     print("\n" + "═" * 64 + "\n청크 2-5 · 전이학습 (백본 비교) ⭐\n" + "═" * 64)
     if not os.path.isdir(f"{TOMATO}/train"):
@@ -233,6 +240,7 @@ def run_chunk_2_5():
 #   ② 마지막 conv 층의 활성화 × (그 클래스에 대한) 기울기 → 가중합 = CAM
 #   ③ 잎 사진 위에 겹쳐 '병반을 봤는지' 눈으로 검증 (오분류 디버깅에 강력)
 # ════════════════════════════════════════════════════════════════════
+# ── ① Grad-CAM 히트맵 생성·저장 ──
 def run_chunk_2_6():
     print("\n" + "═" * 64 + "\n청크 2-6 · Grad-CAM (설명가능 AI) ⭐\n" + "═" * 64)
     ckpt = f"{MODELS}/tomato_resnet18.pt"
@@ -245,7 +253,14 @@ def run_chunk_2_6():
         return
 
     from torchvision import datasets, transforms
-    model = _build_backbone("resnet18", n_classes=2)
+
+    # val 데이터(클래스 수 동적 — 2분류든 3분류든 자동)
+    tf = transforms.Compose([
+        transforms.Resize((224, 224)), transforms.ToTensor(),
+        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
+    val_ds = datasets.ImageFolder(f"{TOMATO}/val", tf)
+
+    model = _build_backbone("resnet18", n_classes=len(val_ds.classes))
     model.load_state_dict(torch.load(ckpt, map_location=device))
     model.eval().to(device)
 
@@ -258,12 +273,6 @@ def run_chunk_2_6():
         o.retain_grad()
         store["act"] = o
     target_layer.register_forward_hook(_save_act)
-
-    # val 첫 이미지 1장으로 시연
-    tf = transforms.Compose([
-        transforms.Resize((224, 224)), transforms.ToTensor(),
-        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
-    val_ds = datasets.ImageFolder(f"{TOMATO}/val", tf)
     x, y = val_ds[0]
     xb = x.unsqueeze(0).to(device).requires_grad_(True)   # grad 가 layer4 까지 흐르도록
 
@@ -300,84 +309,118 @@ def run_chunk_2_6():
 
 
 # ════════════════════════════════════════════════════════════════════
-# 청크 2-8 · LSTM — 환경 시계열 (온도 추세 예측)
-#   ① 시계열 = '순서가 의미 있는' 데이터 → LSTM 이 과거를 기억해 다음을 예측
-#   ② sliding window: 과거 7일 온도 → 다음날 온도 (지도학습으로 변환)
-#   ③ 예측 vs 실제 그림으로 추세를 따라가는지 확인
+# 청크 2-8 · LSTM — 환경 시계열 (다변량 · 다중 시계열)
+#   ① 단변량(온도 1개)→ '다변량'(환경 8변수)로 확장: 외부온도·일사량·CO2·습도 흐름까지 본다
+#   ② 시계열 1개 → 농가·작기·품목별 485개 시계열 전부 학습(2022~24 다년, 시간순 분할, 농가 누수 차단)
+#   ③ baseline(어제값=오늘)과 MAE 비교 → '단변량이라 baseline 못 이김'을 정면 검증
 # ════════════════════════════════════════════════════════════════════
+# 환경 8변수(입력) — 첫 번째(온도내부_평균)가 예측 타깃
+ENV_FEATURES = ["온도내부_평균", "온도내부_최저", "온도내부_최고", "온도내부_표준편차",
+                "습도내부_평균", "co2_평균", "온도외부_평균", "일사량_평균"]
+SEQ_KEYS = ["도", "시군", "농가명", "작기", "품목"]
+WINDOW = 7
+
+
+# ── ① LSTM 모델 정의: 입력 F개 변수 → hidden → 다음날 내부온도 1개 ──
 class TempLSTM(nn.Module):
-    def __init__(self, hidden=32):
+    def __init__(self, n_feat, hidden=64):
         super().__init__()
-        self.lstm = nn.LSTM(input_size=1, hidden_size=hidden, batch_first=True)
+        self.lstm = nn.LSTM(input_size=n_feat, hidden_size=hidden, batch_first=True)
         self.fc = nn.Linear(hidden, 1)
 
-    def forward(self, x):                 # x: (B, seq, 1)
+    def forward(self, x):                 # x: (B, seq, F)
         out, _ = self.lstm(x)             # out: (B, seq, hidden)
-        return self.fc(out[:, -1, :])     # 마지막 타임스텝만 → 다음값 1개
+        return self.fc(out[:, -1, :])     # 마지막 타임스텝만 → 다음날 1개
 
 
+# ── ② 다변량·다중 시계열 전처리·학습·예측 실행 ──
 def run_chunk_2_8():
-    print("\n" + "═" * 64 + "\n청크 2-8 · LSTM (환경 시계열)\n" + "═" * 64)
+    print("\n" + "═" * 64 + "\n청크 2-8 · LSTM (다변량 · 다중 시계열)\n" + "═" * 64)
     if not os.path.exists(ENV_CSV):
         print(f"⚠️ {ENV_CSV} 없음 (Phase1 전처리 산출물 필요)")
         return
     import pandas as pd
+    from torch.utils.data import TensorDataset
 
     df = pd.read_csv(ENV_CSV)
-    # 한 농가·작기·품목의 가장 긴 연속 시계열을 고른다
-    keys = ["도", "시군", "농가명", "작기", "품목"]
-    g = df.groupby(keys)
-    key = max(g.groups, key=lambda k: len(g.get_group(k)))
-    seq_df = g.get_group(key).sort_values("날짜")
-    series = seq_df["온도내부_평균"].to_numpy(dtype=np.float32)
-    print(f"\n선택 시계열: {dict(zip(keys, key))}  (길이 {len(series)}일)")
+    F = len(ENV_FEATURES)
+    # 농가·작기·품목별 시퀀스를 만들고, 각 시퀀스를 '시간순' 80/20 분할(셔플 금지, 농가 누수 차단)
+    Xtr_l, Ytr_l, Xva_l, Yva_l, persist_l = [], [], [], [], []
+    rep = None                                  # 대표 시각화용(가장 긴 시퀀스)
+    n_groups = 0
+    for _, gdf in df.groupby(SEQ_KEYS):
+        arr = gdf.sort_values("날짜")[ENV_FEATURES].to_numpy(np.float32)
+        if len(arr) < WINDOW + 5:
+            continue
+        n_groups += 1
+        split = int(len(arr) * 0.8)
+        for i in range(len(arr) - WINDOW):
+            t = i + WINDOW                       # 예측 대상 시점
+            x = arr[i:t]                         # 과거 WINDOW 일 × F변수
+            y = arr[t, 0]                        # 다음날 내부온도(raw ℃)
+            if t < split:
+                Xtr_l.append(x); Ytr_l.append(y)
+            else:
+                Xva_l.append(x); Yva_l.append(y)
+                persist_l.append(arr[t - 1, 0])  # baseline: 어제값=오늘
+        if rep is None or len(arr) > len(rep[0]):
+            rep = (arr, split)
 
-    # 정규화 + sliding window (과거 WINDOW 일 → 다음날)
-    mu, sd = series.mean(), series.std()
-    norm = (series - mu) / sd
-    WINDOW = 7
-    X, Y = [], []
-    for i in range(len(norm) - WINDOW):
-        X.append(norm[i:i + WINDOW])
-        Y.append(norm[i + WINDOW])
-    X = torch.tensor(np.array(X)).unsqueeze(-1)   # (N, 7, 1)
-    Y = torch.tensor(np.array(Y)).unsqueeze(-1)   # (N, 1)
+    Xtr, Xva = np.array(Xtr_l), np.array(Xva_l)
+    Ytr, Yva = np.array(Ytr_l), np.array(Yva_l)
+    print(f"\n시계열 그룹 {n_groups}개 · 입력 변수 {F}개 → train {len(Xtr)} / val {len(Xva)} window")
 
-    # 앞 80% 학습 / 뒤 20% 검증 (시계열이라 시간순 분할 — 셔플 금지)
-    n_train = int(len(X) * 0.8)
-    Xtr, Ytr = X[:n_train].to(device), Y[:n_train].to(device)
-    Xte, Yte = X[n_train:].to(device), Y[n_train:].to(device)
+    # 정규화: train 통계로만(시간 누수 방지). 타깃(feature0)은 그 통계로 역변환.
+    mu = Xtr.reshape(-1, F).mean(0); sd = Xtr.reshape(-1, F).std(0) + 1e-8
+    mu0, sd0 = mu[0], sd[0]
+    Xtr, Xva = (Xtr - mu) / sd, (Xva - mu) / sd
+    ytr = (Ytr - mu0) / sd0
 
-    model = TempLSTM().to(device)
-    crit = nn.MSELoss()
-    opt = torch.optim.Adam(model.parameters(), lr=1e-2)
-    print("\n[학습] LSTM 200 epoch")
-    for epoch in range(200):
+    loader = DataLoader(TensorDataset(torch.tensor(Xtr), torch.tensor(ytr).unsqueeze(1)),
+                        batch_size=256, shuffle=True)
+    model = TempLSTM(n_feat=F).to(device)
+    crit = nn.MSELoss(); opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    print("\n[학습] LSTM 20 epoch (다변량 · 다중 시계열)")
+    for epoch in range(20):
         model.train()
-        opt.zero_grad()
-        loss = crit(model(Xtr), Ytr)
-        loss.backward(); opt.step()
-        if (epoch + 1) % 50 == 0:
-            print(f"  epoch {epoch+1:3d} | train loss = {loss.item():.4f}")
+        for xb, yb in loader:
+            xb, yb = xb.to(device), yb.to(device)
+            loss = crit(model(xb), yb)
+            opt.zero_grad(); loss.backward(); opt.step()
+        if (epoch + 1) % 5 == 0:
+            print(f"  epoch {epoch+1:2d} | train loss = {loss.item():.4f}")
 
-    # 검증 구간 예측 (정규화 역연산해 실제 온도 단위로)
+    # 전체 val MAE + persistence baseline 비교
     model.eval()
     with torch.no_grad():
-        pred = model(Xte).cpu().numpy().ravel() * sd + mu
-    true = Yte.cpu().numpy().ravel() * sd + mu
+        pv = model(torch.tensor(Xva).to(device)).cpu().numpy().ravel() * sd0 + mu0
+    mae = np.abs(pv - Yva).mean()
+    base_mae = np.abs(np.array(persist_l) - Yva).mean()
+    print(f"\n[검증] LSTM MAE = {mae:.2f}℃  ·  persistence(어제값) baseline = {base_mae:.2f}℃")
+
+    # 대표 시퀀스(가장 긴 농가)의 val 구간을 그림으로
+    arr, split = rep
+    xs, ts, bs = [], [], []
+    for i in range(len(arr) - WINDOW):
+        t = i + WINDOW
+        if t >= split:
+            xs.append((arr[i:t] - mu) / sd); ts.append(arr[t, 0]); bs.append(arr[t - 1, 0])
+    with torch.no_grad():
+        pr = model(torch.tensor(np.array(xs, dtype=np.float32)).to(device)).cpu().numpy().ravel() * sd0 + mu0
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(true, label="실제 온도", lw=2, color="#333")
-    ax.plot(pred, label="LSTM 예측", lw=2, ls="--", color="#e45756")
-    ax.set_title("LSTM 환경 시계열 — 다음날 내부온도 예측(검증 구간)")
-    ax.set_xlabel("검증 구간 일자"); ax.set_ylabel("내부온도 평균(℃)")
+    ax.plot(ts, label="실제 온도", lw=2, color="#333")
+    ax.plot(pr, label="LSTM 예측(다변량)", lw=2, ls="--", color="#e45756")
+    ax.plot(bs, label="baseline(어제값)", lw=1.3, ls=":", color="#999")
+    ax.set_title(f"LSTM 다변량·다중 시계열 — 다음날 내부온도 예측\n"
+                 f"전체 val MAE {mae:.2f}℃  vs  baseline {base_mae:.2f}℃")
+    ax.set_xlabel("대표 농가 검증 구간 일자"); ax.set_ylabel("내부온도 평균(℃)")
     ax.legend(); ax.grid(alpha=0.3)
     fig.tight_layout()
     path = f"{FIGS}/08_lstm_forecast.png"
     fig.savefig(path, dpi=120, bbox_inches="tight"); plt.close(fig)
-    mae = np.abs(pred - true).mean()
-    print(f"\n[검증] MAE = {mae:.2f}℃  → 그림 저장 {path}")
-    print("  LSTM 은 과거 7일의 흐름을 hidden state 에 기억해 다음날을 추정 — 순서가 핵심.")
+    print(f"  그림 저장 → {path}")
+    print("  다변량(외부온도·일사량·CO2…) + 201개 시계열 통합 학습 — baseline 대비가 핵심 평가.")
 
 
 # ════════════════════════════════════════════════════════════════════

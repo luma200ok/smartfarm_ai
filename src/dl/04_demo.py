@@ -27,12 +27,13 @@ TOMATO = f"{ROOT}/data/tomato"
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 print(f"device = {device}  (torch {torch.__version__})")
 
-CLASSES = ["disease", "normal"]      # ImageFolder 알파벳순(2-5와 동일)
+CLASSES = ["leaf_mold", "normal", "tylcv"]   # ImageFolder 알파벳순(2-5와 동일, 3분류)
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def load_resnet18(ckpt, n_classes=2):
+# ── (공용①) 모델 로드 ──
+def load_resnet18(ckpt, n_classes=3):
     """추론용 resnet18 — 사전학습 weight 불필요(우리 학습 가중치를 덮어쓰므로)."""
     from torchvision import models
     m = models.resnet18(weights=None)
@@ -41,6 +42,7 @@ def load_resnet18(ckpt, n_classes=2):
     return m.eval().to(device)
 
 
+# ── (공용②) 전처리 ──
 def preprocess(pil):
     from torchvision import transforms
     tf = transforms.Compose([
@@ -50,6 +52,7 @@ def preprocess(pil):
     return tf(pil.convert("RGB")).unsqueeze(0)
 
 
+# ── (공용③) 예측+CAM ──
 def predict(model, pil, want_cam=True):
     """한 장 추론 → {label, prob, probs, cam}. cam 은 2-6과 같은 Grad-CAM(224×224, 0~1)."""
     x = preprocess(pil).to(device)
@@ -91,6 +94,7 @@ def predict(model, pil, want_cam=True):
 #   ② 실제 val 이미지 1장으로 추론 시연(label·확률)
 #   ③ 웹 데모는 app/phase2_dl.py (streamlit run)
 # ════════════════════════════════════════════════════════════════════
+# ── (실행) 추론 파이프라인 시연 ──
 def run_chunk_2_10():
     print("\n" + "═" * 64 + "\n청크 2-10 · 모델 저장 · 추론 + Streamlit\n" + "═" * 64)
     ckpt = f"{MODELS}/tomato_resnet18.pt"
@@ -102,7 +106,7 @@ def run_chunk_2_10():
     print(f"\n[①] 모델 로드 → {ckpt}")
 
     # ② val 이미지 1장으로 추론 시연
-    samples = sorted(glob.glob(f"{TOMATO}/val/disease/*.jpg"))
+    samples = sorted(glob.glob(f"{TOMATO}/val/leaf_mold/*.jpg"))
     if not samples:
         print("⚠️ 추론할 val 이미지 없음 → python src/dl/prepare_tomato.py")
         return
@@ -122,6 +126,7 @@ def run_chunk_2_10():
 # 청크 2-12 · 회고 · 참고문헌 (포트폴리오 phase2_dl.md 로)
 #   학습 로그용 짧은 체크리스트 — 정식 수행내역서는 docs/phase2_dl.md 에 작성
 # ════════════════════════════════════════════════════════════════════
+# ── (실행) 회고·참고문헌 출력 ──
 def run_chunk_2_12():
     print("\n" + "═" * 64 + "\n청크 2-12 · 회고 · 참고문헌\n" + "═" * 64)
     items = [

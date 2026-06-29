@@ -41,6 +41,7 @@ device = "mps" if torch.backends.mps.is_available() else "cpu"
 print(f"device = {device}  (torch {torch.__version__})")
 
 
+# ── (보조) 로그축 지수 라벨 포맷터 ──
 def _log10_formatter():
     """로그축 지수(10⁻¹…) 마이너스 깨짐 방지용 포맷터.
     기본 LogFormatter 는 라벨을 $\\mathdefault{10^{-1}}$ 로 그리는데, \\mathdefault 는
@@ -63,6 +64,7 @@ def _log10_formatter():
 # ① 뉴런 1개 = 입력×가중치 합 + 편향 → 활성화
 #    nn.Linear 가 정확히 이 계산임을 '손계산'과 대조해 확인한다.
 # ─────────────────────────────────────────────────────────────
+# ── ① 뉴런 손계산 vs nn.Linear 검증 ──
 def neuron_check():
     x = torch.tensor([2.0, -1.0, 0.5])      # 입력 3개
     w = torch.tensor([0.5, -0.3, 0.8])      # 가중치 3개
@@ -86,6 +88,7 @@ def neuron_check():
 # ─────────────────────────────────────────────────────────────
 # ② 활성화함수 4종 — 모양과 쓰임
 # ─────────────────────────────────────────────────────────────
+# ── ② 활성화함수 4종 시각화 ──
 def plot_activations():
     x = torch.linspace(-5, 5, 200)
     funcs = {
@@ -119,6 +122,7 @@ def plot_activations():
 #    같은 구조의 망을 (A) 활성화 없이 / (B) ReLU 끼워서 forward 만 한다.
 #    학습을 안 해도 랜덤 가중치만으로 차이가 드러난다.
 # ─────────────────────────────────────────────────────────────
+# ── ③ 활성화 없으면 직선 실험 ──
 def linear_vs_relu():
     x = torch.linspace(-3, 3, 200).reshape(-1, 1)
 
@@ -170,6 +174,7 @@ def linear_vs_relu():
 # ① 손실(Loss) — 예측과 정답의 차이를 숫자 1개로
 #    회귀용 MSE(평균제곱오차)를 손계산과 nn.MSELoss 로 대조한다.
 # ─────────────────────────────────────────────────────────────
+# ── ① 손실(MSE/CE) 손계산 대조 ──
 def loss_check():
     pred = torch.tensor([2.0, 0.0, 3.0])    # 모델 예측
     true = torch.tensor([1.0, 0.0, 5.0])    # 정답
@@ -193,6 +198,7 @@ def loss_check():
 #    loss.backward() 가 'loss 를 가중치로 미분'한 값을 .grad 에 채운다.
 #    간단한 함수 loss=(w-3)^2 로 손미분 2(w-3) 과 대조.
 # ─────────────────────────────────────────────────────────────
+# ── ② 역전파 자동미분 검증 ──
 def autograd_check():
     w = torch.tensor(0.0, requires_grad=True)   # requires_grad=True → 이 값의 기울기를 추적
     loss = (w - 3) ** 2                          # 최소점은 w=3
@@ -208,6 +214,7 @@ def autograd_check():
 # ③ ★학습 루프 — 2-1의 ReLU 망이 sin 곡선을 '진짜 학습'
 #    모든 DL 공통 5단계 리듬: 예측 → 손실 → zero_grad → backward → step
 # ─────────────────────────────────────────────────────────────
+# ── ③ sin 곡선 학습 루프 ──
 def train_fit_sin():
     x = torch.linspace(-3, 3, 200).reshape(-1, 1)
     y_true = torch.sin(x)                         # 목표 곡선
@@ -256,6 +263,7 @@ def train_fit_sin():
 #    같은 문제 loss=(w-3)^2 를 lr 3종으로 경사하강 → 발산/적당/느림 비교.
 #    (수렴 판단이 명확하도록 간단한 볼록함수 + 순수 경사하강으로 본다)
 # ─────────────────────────────────────────────────────────────
+# ── ④ 학습률 효과 비교 ──
 def lr_experiment():
     # 수렴 조건은 lr<1 (grad=2(w-3) 이라 lr<2/2). 1.1 은 경계를 넘겨 매 step 손실이 1.2배씩 커짐 → 확실히 발산.
     settings = {"lr=1.1 → 발산": 1.1, "lr=0.1 → 적당(수렴)": 0.1, "lr=0.01 → 너무 느림": 0.01}
@@ -290,6 +298,7 @@ def lr_experiment():
 # ① DataLoader 맛보기 — 데이터를 'batch' 로 꺼내는 컨베이어벨트
 #    작은 데이터 10개를 batch_size=4 로 묶으면 (4, 4, 2) 세 묶음으로 나온다.
 # ─────────────────────────────────────────────────────────────
+# ── ① DataLoader batch 동작 확인 ──
 def loader_peek():
     X = torch.arange(10).reshape(10, 1).float()   # 0~9, 한 줄에 하나
     y = torch.arange(10)                           # 라벨도 0~9 (추적용)
@@ -311,6 +320,7 @@ def loader_peek():
 # ② 커스텀 Dataset — TensorDataset 의 정체를 손으로 까보기
 #    Dataset = '__len__(몇 개) + __getitem__(i번째)' 두 메서드면 끝.
 # ─────────────────────────────────────────────────────────────
+# ── ② 커스텀 Dataset 클래스 ──
 class MoonDataset(Dataset):
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)  # 입력은 float32
@@ -323,6 +333,7 @@ class MoonDataset(Dataset):
         return self.X[i], self.y[i]
 
 
+# ── ② Dataset 동작 확인 ──
 def dataset_check():
     X, y = make_moons(n_samples=8, noise=0.1, random_state=0)
     ds = MoonDataset(X, y)
@@ -337,6 +348,7 @@ def dataset_check():
 # ③ ★batch 학습 루프 — 2-2의 5단계를 'batch for문'으로 한 겹 감쌈
 #    make_moons 2클래스 분류 · CrossEntropy · .to(device)
 # ─────────────────────────────────────────────────────────────
+# ── ③ batch 학습 루프(2클래스 분류) ──
 def train_moons():
     X, y = make_moons(n_samples=1000, noise=0.2, random_state=0)
     loader = DataLoader(MoonDataset(X, y), batch_size=32, shuffle=True)
@@ -370,6 +382,7 @@ def train_moons():
     _plot_decision_boundary(model, X, y, acc)
 
 
+# ── (보조) 결정경계 시각화 ──
 def _plot_decision_boundary(model, X, y, acc):
     # 평면을 격자로 깔고 각 점의 예측 클래스를 색칠 → 모델이 그은 경계 시각화
     h = 0.02
@@ -394,6 +407,7 @@ def _plot_decision_boundary(model, X, y, acc):
 # ④ ★full-batch vs mini-batch — 데이터를 통째로 vs 32개씩
 #    같은 모델·epoch 수에서 epoch당 평균 손실이 누가 빨리 내려가나.
 # ─────────────────────────────────────────────────────────────
+# ── ④ full vs mini-batch 비교 ──
 def batch_compare():
     X, y = make_moons(n_samples=1000, noise=0.2, random_state=0)
     ds = MoonDataset(X, y)
@@ -432,6 +446,7 @@ def batch_compare():
 # ════════════════════════════════════════════════════════════════════
 # 청크 러너 — '파먹기' 단위 (--chunk 로 골라 실행)
 # ════════════════════════════════════════════════════════════════════
+# ── (실행) 청크 2-1 전체 실행 진입점 ──
 def run_chunk_2_1():
     print("\n" + "═" * 64 + "\n청크 2-1 · 신경망 기초 (뉴런·활성화)\n" + "═" * 64)
     neuron_check()
@@ -439,6 +454,7 @@ def run_chunk_2_1():
     linear_vs_relu()
 
 
+# ── (실행) 청크 2-2 전체 실행 진입점 ──
 def run_chunk_2_2():
     print("\n" + "═" * 64 + "\n청크 2-2 · 학습 메커니즘 (손실·역전파·옵티마이저)\n" + "═" * 64)
     loss_check()
@@ -447,6 +463,7 @@ def run_chunk_2_2():
     lr_experiment()
 
 
+# ── (실행) 청크 2-3 전체 실행 진입점 ──
 def run_chunk_2_3():
     print("\n" + "═" * 64 + "\n청크 2-3 · Dataset/DataLoader · batch 루프\n" + "═" * 64)
     loader_peek()

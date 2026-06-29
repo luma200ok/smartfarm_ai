@@ -21,6 +21,7 @@ jupyter
 # --- Phase 2 — DL (Apple Silicon: MPS 가속 자동 지원) ---
 torch
 torchvision
+ultralytics            # YOLOv8 병해 잎 위치 검출 (src/dl/05_detect.py · 청크 2-11)
 
 # --- Phase 3 — LLM (새 세션에서 주석 해제) ---
 # anthropic

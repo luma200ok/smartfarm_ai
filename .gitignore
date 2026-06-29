@@ -39,3 +39,6 @@ docs/_local/
 # Phase2 DL 산출물(대용량/캐시)
 data/torchvision/
 data/tomato/
+data/tomato_yolo/
+runs/
+yolov8n.pt
