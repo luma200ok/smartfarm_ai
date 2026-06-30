@@ -171,20 +171,25 @@ def _tomato_loaders(batch=32):
 
 
 # ── ③ 학습: freeze 된 몸통 위에서 머리(head)만 학습 ──
-def _train_head(model, train_loader, val_loader, epochs=3):
-    """freeze 된 backbone 위에서 head 만 학습. (val 정확도 반환)"""
+def _train_head(model, train_loader, val_loader, epochs=3, epoch_cb=None):
+    """freeze 된 backbone 위에서 head 만 학습. (val 정확도 반환)
+    epoch_cb(epoch, val_acc, train_loss) 가 주어지면 epoch 마다 호출(MLflow 로깅용)."""
     crit = nn.CrossEntropyLoss()
     params = [p for p in model.parameters() if p.requires_grad]   # head 파라미터만
     opt = torch.optim.Adam(params, lr=1e-3)
     model.to(device)
     for epoch in range(epochs):
         model.train()
+        run_loss, seen = 0.0, 0
         for xb, yb in train_loader:
             xb, yb = xb.to(device), yb.to(device)
             loss = crit(model(xb), yb)
             opt.zero_grad(); loss.backward(); opt.step()
+            run_loss += float(loss) * xb.size(0); seen += xb.size(0)
         acc = _eval_acc(model, val_loader)
         print(f"    epoch {epoch+1} | val acc = {acc:.3f}")
+        if epoch_cb:
+            epoch_cb(epoch + 1, acc, run_loss / max(seen, 1))
     return acc
 
 
@@ -210,14 +215,30 @@ def run_chunk_2_5():
     train_loader, val_loader, classes = _tomato_loaders()
     print(f"\n클래스 = {classes}  (ImageFolder 가 폴더명으로 자동 라벨링)")
 
+    # MLflow 실험 추적 — 백본별 run 으로 하이퍼파라미터·정확도·가중치를 로컬 mlruns/ 에 기록
+    # (서버·레지스트리 없이 파일 스토어. 데모 서빙엔 영향 없음 — 학습 단계 전용)
+    import mlflow
+    mlflow.set_tracking_uri(f"sqlite:///{ROOT}/mlflow.db")   # MLflow 3.x 권장 DB 백엔드(파일스토어 폐기)
+    mlflow.set_experiment("phase2_tomato_backbone")
+
     results = {}
     for name in ("resnet18", "mobilenet_v2"):
         print(f"\n[백본] {name} — backbone freeze, head 만 학습")
-        model = _build_backbone(name, n_classes=len(classes))
-        acc = _train_head(model, train_loader, val_loader, epochs=3)
-        results[name] = acc
-        torch.save(model.state_dict(), f"{MODELS}/tomato_{name}.pt")   # 2-6·2-10 에서 재사용
-        print(f"    저장 → {MODELS}/tomato_{name}.pt")
+        with mlflow.start_run(run_name=name):
+            mlflow.log_params({"backbone": name, "strategy": "freeze_backbone+train_head",
+                               "epochs": 3, "lr": 1e-3, "batch": 32,
+                               "optimizer": "Adam", "n_classes": len(classes)})
+            model = _build_backbone(name, n_classes=len(classes))
+            acc = _train_head(
+                model, train_loader, val_loader, epochs=3,
+                epoch_cb=lambda e, a, l: (mlflow.log_metric("val_acc", a, step=e),
+                                          mlflow.log_metric("train_loss", l, step=e)))
+            results[name] = acc
+            mlflow.log_metric("val_acc_final", acc)
+            ckpt = f"{MODELS}/tomato_{name}.pt"
+            torch.save(model.state_dict(), ckpt)   # 2-6·2-10 에서 재사용
+            mlflow.log_artifact(ckpt)
+            print(f"    저장 → {ckpt}  (MLflow run='{name}' 기록)")
 
     # 백본 비교 막대그림
     fig, ax = plt.subplots(figsize=(6, 4.5))

@@ -45,3 +45,8 @@ yolov8n.pt
 
 # 홈화면 캡처(로컬 보관 · 외부 업로드용, 레포 추적 제외)
 docs/figures/phase2_dl/home.png
+
+# MLflow 실험 추적 로컬 스토어(대용량 · 아티팩트 포함)
+mlruns/
+mlflow.db
+mlartifacts/
