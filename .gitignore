@@ -40,6 +40,8 @@ docs/_local/
 data/torchvision/
 data/tomato/
 data/tomato_yolo/
+data/tomato_part/
+data/tomato_v1_mixed/
 runs/
 yolov8n.pt
 
