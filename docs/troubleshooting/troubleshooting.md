@@ -90,7 +90,8 @@
 
 ## C. 배포 (OCI / Streamlit)
 
-> 환경: Oracle Linux 9 (aarch64, OCI Ampere A1), 멀티앱 공용 호스트. 근거: `docs/_local/deploy/oci-deployment.md` §4.
+> 환경: Oracle Linux 9 (aarch64, OCI Ampere A1), 멀티앱 공용 호스트.
+> **상세 원본(단계별 명령 포함): `docs/_local/deploy/oci-deployment.md` §4 T1~T8.** 운영 FAQ는 `deploy/deploy_oci.md`.
 
 ### C-1. systemd 서비스명 충돌 — 기존 Java 백엔드 유닛을 덮어씀 ⚠️ (가장 위험)
 - **증상**: `cp deploy/smartfarm.service /etc/systemd/system/` 했더니 기존 Java 백엔드 `smartfarm.service`(8084, 실시간 센서 수신)를 Streamlit 정의로 덮어씀. `journalctl -u smartfarm`에 Java 로그가 떠서 발견, `curl 8501` 거부.

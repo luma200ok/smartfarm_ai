@@ -107,6 +107,8 @@ sudo systemctl restart smartfarm
 모델이 바뀌면 3번 rsync 재실행.
 
 ## 트러블슈팅
+> 아래는 운영 중 빠른 대응 FAQ. **배포 당시 실제 겪은 문제 전체 기록은 [트러블슈팅 내역](../docs/troubleshooting/troubleshooting.md) §C 참고.**
+
 - **502/연결 안 됨**: `systemctl status smartfarm` 확인 → streamlit 죽었으면 `journalctl -u smartfarm -e`.
 - **HTTPS 발급 실패**: DNS A레코드 전파 전이거나 80/443 미개방 → 1번·5번 재확인.
 - **DL 모델 에러 화면**: 3번 rsync 누락 → `ls models/*.pt` 확인.
