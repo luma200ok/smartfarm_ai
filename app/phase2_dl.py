@@ -146,7 +146,13 @@ def load_part_model():
 
 
 def predict_part(pil):
-    """입력 사진의 토마토 부위 추론 → (부위코드, 확률). leaf 가 아니면 잎 진단을 막는다."""
+    """입력 사진의 토마토 부위 추론 → (부위코드, 확률). leaf 가 아니면 잎 진단을 막는다.
+
+    부위 모델(PART_CKPT)이 없으면 게이트를 건너뛴다('leaf' 취급) — 모델 파일 미배포 시
+    앱 전체가 죽지 않게 한다. 비잎 입력은 앞단 plant_score(OOD) 게이트가 1차로 거른다.
+    """
+    if not PART_CKPT.exists():
+        return "leaf", 0.0
     from torchvision import transforms
     tf = transforms.Compose([
         transforms.Resize((224, 224)), transforms.ToTensor(),
