@@ -71,8 +71,8 @@
 > 청크 상세 = `_local/concepts/DL_devlog.md` · 이론 = `DL.md`.
 
 ### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ⚪ 예정
-- ⬜ 3-1 Ollama(qwen2.5:14b) 연동 (숫자·라벨 → 자연어 처방, function calling)
-- ⬜ 3-2 재배지식 RAG (농사로 가이드 검색)
+- ✅ 3-1 Ollama(qwen2.5:14b) 연동 (숫자·라벨 → 자연어 처방, function calling + 환각방어 3종)
+- ✅ 3-2 재배지식 RAG (농사로/NCPMS 가이드 검색 → 근거 인용, bge-m3 임베딩)
 - ⬜ 3-3 통합 파이프라인 (ML/LSTM 예측 + CNN 진단 + RAG → 처방)
 - ⬜ 3-4 알림(디스코드 Webhook) + Streamlit 대시보드
 - 🏁 **Phase 3 끝 = 사진+센서 → 자연어 처방 + 알림**
@@ -105,3 +105,19 @@
 - Phase 2 DL 완료: 3분류(서빙 resnet18 acc 0.97·백본 best mobilenet 0.987, MLflow)+설명(Grad-CAM)+검출(YOLO mAP@50 0.78)+강건화(부위 게이트 0.932)+다변량 시계열(LSTM MAE 1.18℃<baseline 1.25, 485개 다년) · 수행내역서 `phase2_dl.md` · 데모 smartfarm-ai.rkqkdrnportfolio.shop
 1. 청크 3-1(LLM 기초·프롬프트)부터 → `src/llm/`
 2. CNN 진단 + LSTM 예측 + RAG 재배가이드 → 자연어 처방 통합 파이프라인
+
+---
+
+## 🔮 향후 확장 백로그 (기능 구현 후, 전이학습식 점진 확장)
+
+### ⭐ 진단 병해 클래스 확장 (Phase 2 재학습 — 최우선 확장)
+현재 진단 모델은 **3종(잎곰팡이병·정상·황화잎말이)**만 구분. 농사로 곰팡이병 큐레이션엔 4종이 있으나 나머지는 학습 데이터가 없어 진단 불가.
+**확장 = 이미지 데이터 확보 → CNN 재학습 → 재평가 → 부위/OOD 게이트·클래스한정 프롬프트·RAG 코퍼스 동반 갱신** (진단 클래스와 RAG는 반드시 세트로 확장).
+- **잎마름역병(late blight):** ✅ PlantVillage(CC0)에 데이터 있음 → **가장 먼저 추가 가능**
+- **흰가루병(powdery mildew)·잿빛곰팡이병(gray mold):** ❌ PlantVillage에 없음 → 별도 데이터셋 수집 선행 필요
+- 다작물 확장(딸기·오이·참외)도 같은 전이학습 패턴.
+
+### 그 외 후속 (리뷰·설계에서 미룬 항목)
+- **RAG 코퍼스:** `normal`(일반재배) 시드 → 농사로 재배기술 실자료로 교체 · (선택) 비진단 병해 3종 `disease: reference`로 보관해 자유 Q&A용
+- **농사로 OpenAPI 로더:** 수기 코퍼스 → API 자동 수집으로 교체(`corpus.py` 소스 어댑터)
+- **3-1 리뷰 이월:** 처방 사후 클래스 검증(범위밖 자동 차단) · CI에 pytest 편입(모델 아티팩트 필요) · `PART_CLASSES` ↔ `tomato_part_classes.json` 드리프트 방지
