@@ -67,6 +67,20 @@ def get_detection(image_path: str) -> dict:
     return {"ood_blocked": False, "boxes": boxes, "lesion_count": len(boxes)}
 
 
+def get_forecast() -> dict:
+    """LSTM 환경 예측 — 다음날 내부온도·추세 + 최근 7일 습도위험. 실패 시 unavailable(예외 전파 안 함)."""
+    try:
+        window = infer.latest_window()
+        if window is None:
+            return {"unavailable": True, "reason": "환경 데이터(env_daily.csv) 없음"}
+        fc = infer.forecast(window)
+        if fc is None:
+            return {"unavailable": True, "reason": "LSTM 모델 없음 (train_lstm.py 실행 필요)"}
+        return fc
+    except Exception as e:                              # CSV 손상·컬럼 변경 등도 죽지 않게
+        return {"unavailable": True, "reason": f"{type(e).__name__}: {e}"}
+
+
 # ── Ollama tools= 스키마 (OpenAI 호환) ────────────────────────────────────
 TOOL_SCHEMAS = [
     {
@@ -98,9 +112,19 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_forecast",
+            "description": "환경 예측 — 다음날 내부온도(℃)·추세는 LSTM 예측값, 습도위험(높음/보통/낮음)은 최근 7일 습도 평균 기준이다. "
+                           "습도가 높으면 곰팡이병 위험이 커지므로 선제 처방(환기 등)에 활용한다. 파라미터 없음.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 TOOL_REGISTRY = {
     "get_diagnosis": get_diagnosis,
     "get_detection": get_detection,
+    "get_forecast": get_forecast,
 }

@@ -30,7 +30,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from llm.rag import retrieve  # noqa: E402
-from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS  # noqa: E402
+from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS, get_forecast  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env")
@@ -48,6 +48,7 @@ SYSTEM_PROMPT = (
     "3) tool이 진단을 차단하면(ood_blocked=true) 병명을 절대 단정하지 말고 재촬영을 안내하라.\n"
     "4) 초보자 눈높이로 쉬운 말을 쓰고 어려운 용어는 풀어 설명하라.\n"
     "5) 재배가이드 근거가 제공되면 그 내용에 부합하게 처방하고, 근거에 없는 구체적 약제명·수치는 지어내지 말라.\n"
+    "6) 환경 예측(다음날 온도·습도위험)이 제공되면 진단과 교차해 시간축 선제 조치를 제안하라.\n"
     "최종 답변은 지정된 JSON 스키마로만 출력한다."
 )
 
@@ -92,6 +93,14 @@ def _rag_directive(chunks: list[dict]) -> str:
     body = "\n\n".join(f"[{c['title']}] {c['text']}" for c in chunks)
     return ("아래는 신뢰할 수 있는 재배가이드 근거다. 처방은 이 근거에 부합하게 작성하고, "
             "근거에 없는 구체적 약제명·수치는 지어내지 말라.\n\n" + body)
+
+
+def _forecast_directive(fc: dict) -> str:
+    """시간축 처방(§5-4) — LSTM 환경예측을 진단과 교차해 선제 조치 유도."""
+    return (f"환경 예측(LSTM): 다음날 내부온도 {fc['next_temp']}℃({fc['trend']}), "
+            f"최근 습도 평균 {fc['humidity_mean']}% → 습도위험 '{fc['humidity_risk']}'. "
+            "잎곰팡이병은 고습·야간 결로에서 급속히 번진다. 습도위험이 '높음'·'보통'이면 "
+            "야간 환기·제습 같은 환경 선제 조치를 '즉시조치' 또는 '예방'에 시간축으로 포함하라.")
 
 
 def _rag_sources(chunks: list[dict]) -> list[str]:
@@ -162,6 +171,12 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
         if rag_chunks:
             messages.append({"role": "system", "content": _rag_directive(rag_chunks)})
     sources = _rag_sources(rag_chunks)
+
+    # 시간축 처방 — 습도 민감 병해(잎곰팡이병)면 환경 예측을 교차 주입
+    if diag and diag.get("label") == "leaf_mold" and not diag.get("ood_blocked") and not diag.get("error"):
+        fc = get_forecast()
+        if fc and not fc.get("unavailable"):
+            messages.append({"role": "system", "content": _forecast_directive(fc)})
 
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도

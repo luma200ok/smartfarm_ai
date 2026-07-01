@@ -108,6 +108,43 @@ def render():
         else:
             st.caption("ℹ️ 이 진단에 대한 재배가이드 근거를 찾지 못했어요.")
 
+    # ── A·B: 환경 예측 기반 일일 코치 · 조기 경보 (3-3) ──
+    st.divider()
+    st.subheader("🌡️ 환경 예측 기반 (LSTM)")
+
+    @st.cache_data(ttl=600)
+    def _forecast_summary():
+        from llm.tools import get_forecast
+        return get_forecast()
+
+    fc = _forecast_summary()
+    if fc and not fc.get("unavailable"):
+        st.markdown(f"**다음날 내부온도** {fc['next_temp']}℃ ({fc['trend']}) · "
+                    f"**습도위험** {fc['humidity_risk']} (최근 평균 {fc['humidity_mean']}%)")
+    else:
+        st.caption("환경 예측 비활성 — `python src/dl/train_lstm.py`로 LSTM 학습 필요")
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        if st.button("🌅 오늘의 코치", use_container_width=True):
+            from llm import pipeline
+            with st.spinner("코칭 생성 중…"):
+                coach = pipeline.daily_coach()
+            st.success(coach.요약)
+            for todo in coach.오늘_할일:
+                st.markdown(f"- {todo}")
+            st.caption(f"근거: {coach.근거}")
+    with cc2:
+        if st.button("⚠️ 조기 경보", use_container_width=True):
+            from llm import pipeline
+            with st.spinner("경보 판단 중…"):
+                w = pipeline.early_warning()
+            box = {"경고": st.error, "주의": st.warning}.get(w.경보수준, st.info)
+            box(f"경보수준: {w.경보수준}" + (f" · 위험병해: {w.위험병해}" if w.위험병해 and w.위험병해 != "없음" else ""))
+            st.markdown(f"- **이유** — {w.이유}")
+            if w.권장조치:
+                st.markdown(f"- **권장조치** — {w.권장조치}")
+
     st.divider()
     st.caption("환각 방어 3종: ① 신뢰도 톤 분기 · ② 게이트 차단 안내 · ③ 클래스 한정성(잎 병해 3종). "
                "진행 상황 → `docs/roadmap.md` Phase 3.")

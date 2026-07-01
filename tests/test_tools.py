@@ -35,3 +35,19 @@ def test_get_detection_blocks_ood(ood_image):
     """검출도 진단과 동일하게 비식물을 차단."""
     r = tools.get_detection(ood_image)
     assert r["ood_blocked"] is True
+
+
+def test_get_forecast_structure(monkeypatch):
+    import numpy as np
+    monkeypatch.setattr(tools.infer, "latest_window",
+                        lambda: np.zeros((7, 8), dtype="float32"))
+    monkeypatch.setattr(tools.infer, "forecast",
+                        lambda w: {"next_temp": 30.0, "trend": "유지",
+                                   "humidity_risk": "보통", "recent_temp": 29.5, "humidity_mean": 70.0})
+    r = tools.get_forecast()
+    assert r["next_temp"] == 30.0 and r["humidity_risk"] == "보통"
+
+
+def test_get_forecast_unavailable_without_data(monkeypatch):
+    monkeypatch.setattr(tools.infer, "latest_window", lambda: None)
+    assert tools.get_forecast()["unavailable"] is True

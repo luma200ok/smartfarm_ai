@@ -62,6 +62,7 @@ def test_prescribe_runs_tool_then_validates(monkeypatch):
                         lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
                                             "prob": 0.9, "probs": {}, "part": "leaf"})
     monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])  # RAG 실호출 차단
+    monkeypatch.setattr(prescribe, "get_forecast", lambda: {"unavailable": True})  # forecast 실호출 차단
     with patch("ollama.chat", side_effect=responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
@@ -81,6 +82,7 @@ def test_prescribe_fills_sources_from_rag(monkeypatch):
                                             "prob": 0.9, "probs": {}, "part": "leaf"})
     monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [
         {"title": "잎곰팡이병 방제", "source": "https://ncpms.rda.go.kr/", "text": "환기하라"}])
+    monkeypatch.setattr(prescribe, "get_forecast", lambda: {"unavailable": True})
     with patch("ollama.chat", side_effect=responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert p.근거출처 == ["잎곰팡이병 방제 — https://ncpms.rda.go.kr/"]
@@ -125,6 +127,48 @@ def test_prescribe_tool_error_still_returns_prescription(monkeypatch):
     with patch("ollama.chat", side_effect=responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
+
+
+def _diag_flow_responses():
+    return [
+        {"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+
+
+def test_prescribe_injects_forecast_for_leaf_mold(monkeypatch):
+    """습도 민감 병해(leaf_mold) → 시간축 처방 위해 get_forecast 호출."""
+    monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
+                        lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
+                                            "prob": 0.9, "probs": {}, "part": "leaf"})
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])
+    called = {"n": 0}
+
+    def _fc():
+        called["n"] += 1
+        return {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
+                "humidity_mean": 90.0, "recent_temp": 29.0}
+
+    monkeypatch.setattr(prescribe, "get_forecast", _fc)
+    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+        prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
+    assert called["n"] == 1
+
+
+def test_prescribe_skips_forecast_for_non_leafmold(monkeypatch):
+    """tylcv 등 비-곰팡이 진단에는 forecast 교차를 넣지 않는다."""
+    monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
+                        lambda image_path: {"ood_blocked": False, "label": "tylcv",
+                                            "prob": 0.9, "probs": {}, "part": "leaf"})
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])
+    called = {"n": 0}
+    monkeypatch.setattr(prescribe, "get_forecast",
+                        lambda: called.__setitem__("n", called["n"] + 1) or {"unavailable": True})
+    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+        prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
+    assert called["n"] == 0
 
 
 def _ollama_up():
