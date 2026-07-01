@@ -29,6 +29,7 @@ _SRC = Path(__file__).resolve().parents[1]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from llm.rag import retrieve  # noqa: E402
 from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,7 @@ SYSTEM_PROMPT = (
     "그 밖의 병·작물·부위 질문에는 지어내지 말고 '진단 보류'라고 정직하게 답하라.\n"
     "3) tool이 진단을 차단하면(ood_blocked=true) 병명을 절대 단정하지 말고 재촬영을 안내하라.\n"
     "4) 초보자 눈높이로 쉬운 말을 쓰고 어려운 용어는 풀어 설명하라.\n"
+    "5) 재배가이드 근거가 제공되면 그 내용에 부합하게 처방하고, 근거에 없는 구체적 약제명·수치는 지어내지 말라.\n"
     "최종 답변은 지정된 JSON 스키마로만 출력한다."
 )
 
@@ -61,7 +63,7 @@ class Prescription(BaseModel):
     예방: str = Field(description="앞으로 재발을 막기 위한 관리 방법")
     재촬영시점: str = Field(description="언제 다시 사진을 찍어 확인하면 좋은지, 또는 재촬영 방법")
     근거출처: list[str] = Field(default_factory=list,
-                             description="처방 근거 출처 목록(3-1에선 비워둠, RAG 도입 후 채움)")
+                             description="처방 근거 출처(RAG 검색 결과로 코드가 채우므로 모델은 비워도 됨)")
 
 
 def _guard_directive(diag: dict | None) -> str:
@@ -83,6 +85,27 @@ def _guard_directive(diag: dict | None) -> str:
     else:
         tone = "확신이 낮다. 절대 단정하지 말고 정밀 확인(재촬영·전문가 상담)을 우선 권하라."
     return f"진단 신뢰도 {prob:.0%} — {tone} 아는 진단 범위는 잎 병해 3종뿐임을 잊지 마라."
+
+
+def _rag_directive(chunks: list[dict]) -> str:
+    """RAG — 검색된 재배가이드 근거를 처방의 사실 기반으로 주입."""
+    body = "\n\n".join(f"[{c['title']}] {c['text']}" for c in chunks)
+    return ("아래는 신뢰할 수 있는 재배가이드 근거다. 처방은 이 근거에 부합하게 작성하고, "
+            "근거에 없는 구체적 약제명·수치는 지어내지 말라.\n\n" + body)
+
+
+def _rag_sources(chunks: list[dict]) -> list[str]:
+    """검색 chunk → 근거출처 문자열 목록(제목·기관명·URL, 중복 제거). 코드가 직접 채워 환각 배제."""
+    out: list[str] = []
+    for c in chunks:
+        label = c.get("title", "")
+        if c.get("source_name"):
+            label += f" ({c['source_name']})"
+        if c.get("source"):
+            label += f" — {c['source']}"
+        if label and label not in out:
+            out.append(label)
+    return out
 
 
 def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
@@ -128,19 +151,33 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
         _log.warning("tool 호출이 %d라운드 내 종료되지 않음 — 마지막 상태로 처방 생성.", MAX_TOOL_ROUNDS)
 
     messages.append({"role": "system", "content": _guard_directive(diag)})
+
+    # RAG — 진단됐고 차단·오류 아니면 라벨로 재배가이드 근거 검색 후 주입
+    rag_chunks: list[dict] = []
+    if diag and diag.get("label") and not diag.get("ood_blocked") and not diag.get("error"):
+        try:
+            rag_chunks = retrieve(user_msg, disease=diag["label"], k=3)
+        except Exception as e:                           # 임베딩/코퍼스 실패해도 처방은 계속
+            _log.warning("RAG 검색 실패 — 근거 없이 진행: %s", e)
+        if rag_chunks:
+            messages.append({"role": "system", "content": _rag_directive(rag_chunks)})
+    sources = _rag_sources(rag_chunks)
+
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
         final = ollama.chat(model=MODEL, messages=messages,
                             format=Prescription.model_json_schema())
         try:
-            return Prescription.model_validate_json(final["message"]["content"])
+            presc = Prescription.model_validate_json(final["message"]["content"])
+            presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
+            return presc
         except ValidationError as e:
             last_err = e
             messages.append({"role": "system",
                              "content": "직전 출력이 스키마와 맞지 않았다. 반드시 지정된 JSON 스키마로만 다시 출력하라."})
     _log.warning("구조화 출력 검증 실패 — 안전 폴백 반환: %s", last_err)
     return Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
-                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-")
+                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources)
 
 
 if __name__ == "__main__":

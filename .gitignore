@@ -43,6 +43,7 @@ data/tomato_yolo/
 data/tomato_part/
 data/tomato_v1_mixed/
 data/plantvillage_tomato/
+data/nongsaro/.rag_index.npz
 runs/
 yolov8n.pt
 

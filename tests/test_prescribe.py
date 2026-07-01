@@ -61,10 +61,52 @@ def test_prescribe_runs_tool_then_validates(monkeypatch):
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
                         lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
                                             "prob": 0.9, "probs": {}, "part": "leaf"})
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])  # RAG 실호출 차단
     with patch("ollama.chat", side_effect=responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
     assert p.즉시조치
+
+
+def test_prescribe_fills_sources_from_rag(monkeypatch):
+    """RAG 검색 결과 → 근거출처가 코드로 채워짐(LLM 아님)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
+                        lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
+                                            "prob": 0.9, "probs": {}, "part": "leaf"})
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [
+        {"title": "잎곰팡이병 방제", "source": "https://ncpms.rda.go.kr/", "text": "환기하라"}])
+    with patch("ollama.chat", side_effect=responses):
+        p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
+    assert p.근거출처 == ["잎곰팡이병 방제 — https://ncpms.rda.go.kr/"]
+
+
+def test_prescribe_ood_skips_rag(monkeypatch):
+    """진단 차단 시 RAG 검색을 아예 호출하지 않는다(엉뚱한 근거 방지)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": [
+            {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
+                        lambda image_path: {"ood_blocked": True, "reason": "잎 아님"})
+    called = {"n": 0}
+
+    def _rt(q, disease=None, k=3):
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr(prescribe, "retrieve", _rt)
+    with patch("ollama.chat", side_effect=responses):
+        p = prescribe.prescribe("봐줘", image_path="x.jpg")
+    assert called["n"] == 0
+    assert p.근거출처 == []
 
 
 def test_prescribe_tool_error_still_returns_prescription(monkeypatch):
@@ -95,7 +137,10 @@ def _ollama_up():
 
 @pytest.mark.integration
 @pytest.mark.skipif(not _ollama_up(), reason="Ollama 데몬 미실행")
-def test_prescribe_real_ollama(leaf_image):
+def test_prescribe_real_ollama(leaf_image, monkeypatch, tmp_path):
+    # RAG 인덱스 캐시를 tmp 로 격리 — 실 데이터 디렉터리(data/nongsaro) 오염 방지
+    from llm.rag import store
+    monkeypatch.setattr(store, "INDEX_PATH", tmp_path / "idx.npz")
     p = prescribe.prescribe("이 토마토 잎 진단하고 조치 알려줘", image_path=leaf_image)
     assert isinstance(p, Prescription)
     assert p.진단요약 and p.즉시조치

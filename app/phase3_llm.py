@@ -102,9 +102,11 @@ def render():
             f"- **재촬영 시점** — {presc.재촬영시점}"
         )
         if presc.근거출처:
-            st.caption("근거: " + ", ".join(presc.근거출처))
+            st.markdown("**📖 근거 출처 (농사로/NCPMS RAG)**")
+            for s in presc.근거출처:
+                st.markdown(f"- {s}")
         else:
-            st.caption("ℹ️ 근거 출처는 3-2 RAG(농사로 재배가이드) 도입 후 채워집니다.")
+            st.caption("ℹ️ 이 진단에 대한 재배가이드 근거를 찾지 못했어요.")
 
     st.divider()
     st.caption("환각 방어 3종: ① 신뢰도 톤 분기 · ② 게이트 차단 안내 · ③ 클래스 한정성(잎 병해 3종). "
