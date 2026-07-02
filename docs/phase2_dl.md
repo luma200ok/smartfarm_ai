@@ -187,7 +187,7 @@ streamlit run app/phase2_dl.py
 ```
 
 - 코드: [`app/phase2_dl.py`](../app/phase2_dl.py)
-- 🔗 라이브 데모: **https://smartfarm-ai.rkqkdrnportfolio.shop** (OCI 배포 · 진단+Grad-CAM·YOLO 검출 탭)
+- 🔗 라이브 데모: **https://smartfarm-ai.luma200ok.com** (OCI 배포 · 진단+Grad-CAM·YOLO 검출 탭)
 
 ### 7.3 단계별 재현
 ```bash
