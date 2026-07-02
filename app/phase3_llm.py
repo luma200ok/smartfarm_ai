@@ -186,17 +186,27 @@ def render():
             wcol1, wcol2 = st.columns([3, 1])
             with wcol2:
                 if st.button("🔄 새로고침", use_container_width=True):
-                    kma_weather._CACHE.clear()
+                    kma_weather.clear_cache()
 
-            current = kma_weather.get_current()
+            def _v(x, unit=""):
+                """관측값 None(누락) → '-' 표시(예: 'None℃' 노출 방지)."""
+                return "-" if x is None else f"{x}{unit}"
+
+            try:                                          # 안전망 이중화 — UI가 죽지 않게
+                current = kma_weather.get_current()
+            except Exception:
+                current = {"unavailable": True, "reason": "날씨 조회 중 오류"}
             if current.get("unavailable"):
                 st.caption(f"ℹ️ 외부 날씨 조회 불가 — {current.get('reason', '알 수 없는 오류')}")
             else:
-                st.markdown(f"외기 **{current['temp']}℃** · 습도 **{current['humidity']}%** "
-                            f"· 강수 **{current['rain']}mm** (내부 {r['온도내부_평균']:.1f}℃ · "
+                st.markdown(f"외기 **{_v(current['temp'], '℃')}** · 습도 **{_v(current['humidity'], '%')}** "
+                            f"· 강수 **{_v(current['rain'], 'mm')}** (내부 {r['온도내부_평균']:.1f}℃ · "
                             f"습도 {r['습도내부_평균']:.0f}% 와 비교)")
 
-            fcst = kma_weather.get_forecast_3d()
+            try:                                          # 안전망 이중화 — UI가 죽지 않게
+                fcst = kma_weather.get_forecast_3d()
+            except Exception:
+                fcst = {"unavailable": True, "reason": "날씨 조회 중 오류"}
             if fcst.get("unavailable"):
                 st.caption(f"ℹ️ 3일 예보 조회 불가 — {fcst.get('reason', '알 수 없는 오류')}")
             else:

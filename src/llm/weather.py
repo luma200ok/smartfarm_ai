@@ -25,7 +25,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 _log = logging.getLogger(__name__)
 _TIMEOUT = 10
 
-_BASE_URL = "http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
+_BASE_URL = "https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0"
 
 # 서울 기본값(농장 좌표 미설정 시)
 _SEOUL_LAT, _SEOUL_LON = 37.5665, 126.9780
@@ -105,11 +105,20 @@ def _cache_put(endpoint: str, nx: int, ny: int, data: dict) -> None:
     _CACHE[(endpoint, nx, ny)] = (time.time(), data)
 
 
-def _ultra_srt_base() -> tuple[str, str]:
-    """초단기실황 base_date/base_time — 매시 40분 이후 제공, 그 전이면 직전 정시-1h."""
+def clear_cache() -> None:
+    """TTL 캐시 비우기 — UI '새로고침' 버튼 등 강제 재조회용(공개 API)."""
+    _CACHE.clear()
+
+
+def _ultra_srt_base(now=None) -> tuple[str, str]:
+    """초단기실황 base_date/base_time — 매시 40분 이후 제공, 그 전이면 직전 정시-1h.
+
+    now 는 테스트 주입용(기본: 현재 시각). 자정 경계(00:00~00:39)면 전날 23시.
+    """
     from datetime import datetime, timedelta
 
-    now = datetime.now()
+    if now is None:
+        now = datetime.now()
     if now.minute < 40:
         now = now - timedelta(hours=1)
     return now.strftime("%Y%m%d"), now.strftime("%H00")
@@ -118,14 +127,16 @@ def _ultra_srt_base() -> tuple[str, str]:
 _VILAGE_FCST_HOURS = [2, 5, 8, 11, 14, 17, 20, 23]
 
 
-def _vilage_fcst_base() -> tuple[str, str]:
+def _vilage_fcst_base(now=None) -> tuple[str, str]:
     """단기예보 base_date/base_time — 발표시각(02,05,08,11,14,17,20,23) +10분 제공.
 
     현재 시각 이전 가장 최근 발표시각 선택. 당일 02:10 이전이면 전날 23시.
+    now 는 테스트 주입용(기본: 현재 시각).
     """
     from datetime import datetime, timedelta
 
-    now = datetime.now()
+    if now is None:
+        now = datetime.now()
     candidates = [now.replace(hour=h, minute=10, second=0, microsecond=0) for h in _VILAGE_FCST_HOURS]
     past = [c for c in candidates if c <= now]
     if past:
@@ -133,6 +144,15 @@ def _vilage_fcst_base() -> tuple[str, str]:
     else:
         chosen = (now - timedelta(days=1)).replace(hour=23, minute=10, second=0, microsecond=0)
     return chosen.strftime("%Y%m%d"), chosen.strftime("%H00")
+
+
+def _normalize_items(raw) -> list:
+    """items.item 정규화 — 공공데이터포털은 결과 1건이면 dict로 내려올 수 있음."""
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return [raw]
+    return []
 
 
 def _request(endpoint: str, params: dict) -> dict | None:
@@ -149,16 +169,17 @@ def _request(endpoint: str, params: dict) -> dict | None:
         if result_code != "00":
             _log.warning("KMA %s resultCode=%s", endpoint, result_code)
             return None
-        items = body["response"]["body"]["items"]["item"]
+        items = _normalize_items(body["response"]["body"]["items"]["item"])
         return {"items": items}
-    except Exception as e:                                # 네트워크·파싱 오류 모두 best-effort
-        _log.warning("KMA %s 호출 실패: %s", endpoint, e)
+    except Exception as e:
+        # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
+        _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
         return None
 
 
 def get_current(lat: float | None = None, lon: float | None = None) -> dict:
     """초단기실황 — 기온(℃)·습도(%)·강수(mm). 실패 시 unavailable."""
-    if os.getenv("KMA_SERVICE_KEY") is None:
+    if not os.getenv("KMA_SERVICE_KEY"):                  # 미설정·빈 문자열 모두 미설정 취급
         return {"unavailable": True, "reason": "KMA_SERVICE_KEY 미설정"}
 
     if lat is None or lon is None:
@@ -198,7 +219,7 @@ def get_current(lat: float | None = None, lon: float | None = None) -> dict:
 
 def get_forecast_3d(lat: float | None = None, lon: float | None = None) -> dict:
     """단기예보 3일 — 날짜별 최저/최고기온 + 시간별 기온·습도·강수확률·하늘상태. 실패 시 unavailable."""
-    if os.getenv("KMA_SERVICE_KEY") is None:
+    if not os.getenv("KMA_SERVICE_KEY"):                  # 미설정·빈 문자열 모두 미설정 취급
         return {"unavailable": True, "reason": "KMA_SERVICE_KEY 미설정"}
 
     if lat is None or lon is None:
