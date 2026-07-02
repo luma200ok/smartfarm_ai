@@ -39,11 +39,12 @@ _GRAY = 9807270
 def _cause(z: float, cold: bool) -> str:
     """잔차 z-score(=(실측-기대)/σ) → 원인 추정 문구.
 
-    cold=True(저온 경보 방향): |z|<2 → 기대값 자체가 낮음(외기 요인) / z<=-2 → 기대보다도
-    더 낮음(설비 고장 의심). cold=False(고온 경보 방향)는 대칭(냉방)."""
+    cold=True(저온 경보 방향): z>-2 → 기대값 자체가 낮음(외기 요인) / z<=-2 → 기대보다도
+    더 낮음(설비 고장 의심). cold=False(고온 경보 방향)는 대칭 — z<+2 → 외기 요인 /
+    z>=+2 → 기대보다도 더 높음(냉방·환기 고장 의심)."""
     if cold:
         return "설비(난방) 고장 의심" if z <= -2.0 else "외기 요인(한파로 설비 능력 한계)"
-    return "설비(냉방) 고장 의심" if z >= 2.0 else "외기 요인(폭염으로 설비 능력 한계)"
+    return "설비(냉방·환기) 고장 의심" if z >= 2.0 else "외기 요인(폭염으로 설비 능력 한계)"
 
 
 def assess(reading: dict, expect: dict | None = None) -> list[dict]:
@@ -82,12 +83,19 @@ def assess(reading: dict, expect: dict | None = None) -> list[dict]:
             alert["cause"] = _cause(z, cold=True)
         out.append(alert)
     elif z is not None:
-        # 임계(TEMP_COLD) 미달 전이라도 잔차가 크게 음수면 설비 이상 의심(별도 경보)
-        level = "경고" if z <= EQUIP_CRIT_Z else ("주의" if z <= EQUIP_WARN_Z else None)
-        if level:
+        # 임계(TEMP_COLD/TEMP_HOT) 도달 전이라도 잔차가 크게 음수(난방 고장 의심)이거나
+        # 크게 양수(온화한 외기 대비 과열 — 냉방·환기 고장 의심)면 별도 equip_anom 경보.
+        # temp_cold/temp_hot 이 이미 발생한 경우는 위 분기에서 cause 필드가 원인을 담당(발송 생략).
+        if z <= EQUIP_WARN_Z:
+            level = "경고" if z <= EQUIP_CRIT_Z else "주의"
             out.append({"key": "equip_anom", "level": level, "disease": "",
                         "cause": _cause(z, cold=True),
                         "reason": f"내부 기대값 대비 급락(z={z:.1f}σ) — 임계 도달 전이지만 설비 점검 권장"})
+        elif z >= -EQUIP_WARN_Z:
+            level = "경고" if z >= -EQUIP_CRIT_Z else "주의"
+            out.append({"key": "equip_anom", "level": level, "disease": "",
+                        "cause": _cause(z, cold=False),
+                        "reason": f"내부 기대값 대비 급등(z=+{z:.1f}σ) — 임계 도달 전이지만 설비 점검 권장"})
     return out
 
 

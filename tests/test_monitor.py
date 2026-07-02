@@ -136,6 +136,24 @@ def test_equip_anom_critical_level():
     assert any(a["key"] == "equip_anom" and a["level"] == "경고" for a in alerts)
 
 
+def test_equip_anom_hot_direction_symmetric():
+    """잔차가 크게 양수(+2σ/+3σ, 온화한 외기 대비 과열)면 냉방·환기 고장 의심 equip_anom."""
+    warn = monitor.assess(_r(60, 27.0), expect=_expect(mean=25.0, sigma_mean=1.0))
+    assert any(a["key"] == "equip_anom" and a["level"] == "주의"
+               and a["cause"] == "설비(냉방·환기) 고장 의심" for a in warn)
+    crit = monitor.assess(_r(60, 28.5), expect=_expect(mean=25.0, sigma_mean=1.0))
+    assert any(a["key"] == "equip_anom" and a["level"] == "경고" for a in crit)
+
+
+def test_equip_anom_hot_suppressed_when_temp_hot_active():
+    """temp_hot 임계를 이미 넘었으면 equip_anom 생략(cause 필드가 원인 담당) — 고온 방향 동일 정책."""
+    alerts = monitor.assess(_r(60, 37.0), expect=_expect(mean=30.0, sigma_mean=1.0))
+    keys = {a["key"] for a in alerts}
+    assert "temp_hot" in keys and "equip_anom" not in keys
+    hot = next(a for a in alerts if a["key"] == "temp_hot")
+    assert hot["cause"] == "설비(냉방·환기) 고장 의심"
+
+
 def test_equip_anom_suppressed_when_temp_alert_already_active():
     """temp_cold/temp_hot 임계를 이미 넘었으면 equip_anom은 별도 발송 생략(cause가 원인 담당)."""
     alerts = monitor.assess(_r(60, 2.0), expect=_expect(mean=10.0, sigma_mean=1.0))
