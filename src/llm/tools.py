@@ -19,6 +19,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from dl import infer  # noqa: E402
+from llm import weather  # noqa: E402
 
 
 def _round(d, n=3):
@@ -85,6 +86,16 @@ def get_forecast(window=None) -> dict:
         return {"unavailable": True, "reason": f"{type(e).__name__}: {e}"}
 
 
+def get_weather(kind: str = "forecast") -> dict:
+    """기상청(KMA) 외부 날씨 — "current"(초단기실황) 또는 "forecast"(3일 예보). 실패 시 unavailable(예외 전파 안 함)."""
+    try:
+        if kind == "current":
+            return weather.get_current()
+        return weather.get_forecast_3d()
+    except Exception as e:                              # 네트워크·파싱 오류도 죽지 않게
+        return {"unavailable": True, "reason": f"{type(e).__name__}: {e}"}
+
+
 # ── Ollama tools= 스키마 (OpenAI 호환) ────────────────────────────────────
 TOOL_SCHEMAS = [
     {
@@ -125,10 +136,27 @@ TOOL_SCHEMAS = [
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "기상청(KMA) 외부 날씨를 조회한다. kind='current'면 현재 실황(기온·습도·강수), "
+                           "kind='forecast'(기본)면 3일 예보(날짜별 최저·최고기온, 시간별 기온·습도·강수확률·하늘상태)를 반환. "
+                           "날씨·외기·예보 질문에 사용한다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["current", "forecast"],
+                             "description": "current=현재 실황, forecast=3일 예보(기본)"},
+                },
+            },
+        },
+    },
 ]
 
 TOOL_REGISTRY = {
     "get_diagnosis": get_diagnosis,
     "get_detection": get_detection,
     "get_forecast": get_forecast,
+    "get_weather": get_weather,
 }
