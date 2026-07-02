@@ -197,7 +197,8 @@ def render():
             except Exception:
                 current = {"unavailable": True, "reason": "날씨 조회 중 오류"}
             if current.get("unavailable"):
-                st.caption(f"ℹ️ 외부 날씨 조회 불가 — {current.get('reason', '알 수 없는 오류')}")
+                st.caption(f"ℹ️ 외부 날씨 조회 불가 — {current.get('reason', '알 수 없는 오류')} "
+                           "(기상청 응답 지연/제한일 수 있음 — 잠시 후 🔄 새로고침)")
             else:
                 st.markdown(f"외기 **{_v(current['temp'], '℃')}** · 습도 **{_v(current['humidity'], '%')}** "
                             f"· 강수 **{_v(current['rain'], 'mm')}** (내부 {r['온도내부_평균']:.1f}℃ · "
@@ -208,7 +209,8 @@ def render():
             except Exception:
                 fcst = {"unavailable": True, "reason": "날씨 조회 중 오류"}
             if fcst.get("unavailable"):
-                st.caption(f"ℹ️ 3일 예보 조회 불가 — {fcst.get('reason', '알 수 없는 오류')}")
+                st.caption(f"ℹ️ 3일 예보 조회 불가 — {fcst.get('reason', '알 수 없는 오류')} "
+                           "(기상청 응답 지연/제한일 수 있음 — 잠시 후 🔄 새로고침)")
             else:
                 daily = fcst.get("daily") or []
                 if daily:

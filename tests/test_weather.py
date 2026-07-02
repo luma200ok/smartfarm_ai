@@ -40,6 +40,7 @@ def _error_response(code="03"):
 
 def setup_function(_):
     weather._CACHE.clear()
+    weather._FAIL_CACHE.clear()
 
 
 def test_to_grid_seoul():
@@ -107,6 +108,7 @@ def test_request_failure_log_hides_service_key(monkeypatch, caplog):
     """예외 로그에 serviceKey가 노출되면 안 됨(P1) — 예외 타입만 기록."""
     import logging
     monkeypatch.setenv("KMA_SERVICE_KEY", "SECRET_KEY_abcdefg")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
     err = Exception("Max retries: https://apis.data.go.kr/...?serviceKey=SECRET_KEY_abcdefg")
     with caplog.at_level(logging.WARNING, logger="llm.weather"):
         with patch("requests.get", side_effect=err):
@@ -166,6 +168,7 @@ def test_get_forecast_3d_parses_response(monkeypatch):
 
 def test_result_code_error_is_unavailable(monkeypatch):
     monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
     with patch("requests.get", return_value=MagicMock(
             status_code=200, json=lambda: _error_response())):
         r = weather.get_current(37.5665, 126.9780)
@@ -174,6 +177,7 @@ def test_result_code_error_is_unavailable(monkeypatch):
 
 def test_http_exception_is_graceful(monkeypatch):
     monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
     with patch("requests.get", side_effect=Exception("network down")):
         r = weather.get_current(37.5665, 126.9780)
     assert r["unavailable"] is True
@@ -195,3 +199,47 @@ def test_forecast_cache_avoids_second_call(monkeypatch):
         weather.get_forecast_3d(37.5665, 126.9780)
         weather.get_forecast_3d(37.5665, 126.9780)
     assert m.call_count == 1
+
+
+# ── 이슈 #6 후속 — 재시도 1회 + 실패 단기 캐시(negative cache) ──────────────
+
+def test_retry_once_then_success(monkeypatch):
+    """1차 호출 실패(예외) → 1.5초 대기 후 재시도해 성공하면 정상 반환, requests.get 2회 호출."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+    responses = [Exception("timeout"), MagicMock(status_code=200, json=lambda: _ncst_response())]
+    with patch("requests.get", side_effect=responses) as m:
+        r = weather.get_current(37.5665, 126.9780)
+    assert r["unavailable"] is False
+    assert r["temp"] == 23.5
+    assert m.call_count == 2
+
+
+def test_retry_fails_then_negative_cache_short_circuits(monkeypatch):
+    """재시도도 실패하면 unavailable. 60초 내 재요청은 requests.get 미호출로 즉시 unavailable."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+    with patch("requests.get", side_effect=Exception("timeout")) as m:
+        r1 = weather.get_current(37.5665, 126.9780)
+        assert r1["unavailable"] is True
+        assert m.call_count == 2                          # 최초 시도 + 재시도 1회
+
+        r2 = weather.get_current(37.5665, 126.9780)        # 실패 캐시 TTL(60s) 내 재요청
+        assert r2["unavailable"] is True
+        assert m.call_count == 2                           # 추가 호출 없음(negative cache hit)
+
+
+def test_clear_cache_also_clears_negative_cache(monkeypatch):
+    """clear_cache()는 실패 캐시도 비워 다음 요청은 즉시 재시도되어야 함."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+    with patch("requests.get", side_effect=Exception("timeout")) as m:
+        r1 = weather.get_current(37.5665, 126.9780)
+        assert r1["unavailable"] is True
+        assert m.call_count == 2
+
+        weather.clear_cache()
+
+        r2 = weather.get_current(37.5665, 126.9780)
+        assert r2["unavailable"] is True
+        assert m.call_count == 4                          # 실패 캐시 비워져 재호출(2회 더)

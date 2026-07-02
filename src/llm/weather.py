@@ -34,6 +34,14 @@ _SEOUL_LAT, _SEOUL_LON = 37.5665, 126.9780
 _CACHE: dict[tuple[str, int, int], tuple[float, dict]] = {}
 _TTL = {"getUltraSrtNcst": 600, "getVilageFcst": 1800}
 
+# ── 실패 단기 캐시(negative cache): (endpoint, nx, ny) -> 실패 시각 ──────
+# data.go.kr 간헐적 429/타임아웃 시 rerun마다 재호출→연속 실패로 429 악화 방지(이슈 #6 후속).
+_FAIL_CACHE: dict[tuple[str, int, int], float] = {}
+_FAIL_TTL = 60
+
+# 1회 재시도 대기(초) — time.sleep 사용, 테스트에서 monkeypatch로 무력화 가능
+_RETRY_DELAY = 1.5
+
 
 def _farm_location() -> tuple[float, float]:
     """농장 위치. env FARM_LAT/FARM_LON 없으면 서울 기본값."""
@@ -105,9 +113,24 @@ def _cache_put(endpoint: str, nx: int, ny: int, data: dict) -> None:
     _CACHE[(endpoint, nx, ny)] = (time.time(), data)
 
 
+def _fail_cache_hit(endpoint: str, nx: int, ny: int) -> bool:
+    ts = _FAIL_CACHE.get((endpoint, nx, ny))
+    if ts is None:
+        return False
+    return (time.time() - ts) <= _FAIL_TTL
+
+
+def _fail_cache_put(endpoint: str, nx: int, ny: int) -> None:
+    _FAIL_CACHE[(endpoint, nx, ny)] = time.time()
+
+
 def clear_cache() -> None:
-    """TTL 캐시 비우기 — UI '새로고침' 버튼 등 강제 재조회용(공개 API)."""
+    """TTL 캐시 비우기 — UI '새로고침' 버튼 등 강제 재조회용(공개 API).
+
+    실패(negative) 캐시도 함께 비운다 — 사용자 수동 새로고침은 즉시 재시도 의도.
+    """
     _CACHE.clear()
+    _FAIL_CACHE.clear()
 
 
 def _ultra_srt_base(now=None) -> tuple[str, str]:
@@ -156,25 +179,36 @@ def _normalize_items(raw) -> list:
 
 
 def _request(endpoint: str, params: dict) -> dict | None:
-    """공통 HTTP 호출. 실패/오류 시 None(예외 절대 전파 안 함)."""
+    """공통 HTTP 호출. 실패/오류 시 1.5초 대기 후 1회 재시도, 그래도 실패면 None(예외 절대 전파 안 함).
+
+    data.go.kr 간헐적 429/타임아웃 대응(이슈 #6 후속) — 재시도 1회로 일시 장애 흡수.
+    """
     key = os.getenv("KMA_SERVICE_KEY")
     if not key:
         return None
-    try:
-        q = {"serviceKey": key, "pageNo": 1, "dataType": "JSON", **params}
-        r = requests.get(f"{_BASE_URL}/{endpoint}", params=q, timeout=_TIMEOUT)
-        r.raise_for_status()
-        body = r.json()
-        result_code = body["response"]["header"]["resultCode"]
-        if result_code != "00":
-            _log.warning("KMA %s resultCode=%s", endpoint, result_code)
+    q = {"serviceKey": key, "pageNo": 1, "dataType": "JSON", **params}
+    for attempt in range(2):
+        try:
+            r = requests.get(f"{_BASE_URL}/{endpoint}", params=q, timeout=_TIMEOUT)
+            r.raise_for_status()
+            body = r.json()
+            result_code = body["response"]["header"]["resultCode"]
+            if result_code != "00":
+                _log.warning("KMA %s resultCode=%s", endpoint, result_code)
+                if attempt == 0:
+                    time.sleep(_RETRY_DELAY)
+                    continue
+                return None
+            items = _normalize_items(body["response"]["body"]["items"]["item"])
+            return {"items": items}
+        except Exception as e:
+            # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
+            _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
+            if attempt == 0:
+                time.sleep(_RETRY_DELAY)
+                continue
             return None
-        items = _normalize_items(body["response"]["body"]["items"]["item"])
-        return {"items": items}
-    except Exception as e:
-        # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
-        _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
-        return None
+    return None
 
 
 def get_current(lat: float | None = None, lon: float | None = None) -> dict:
@@ -189,6 +223,8 @@ def get_current(lat: float | None = None, lon: float | None = None) -> dict:
     cached = _cache_get("getUltraSrtNcst", nx, ny)
     if cached is not None:
         return cached
+    if _fail_cache_hit("getUltraSrtNcst", nx, ny):
+        return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류(잠시 후 재시도)"}
 
     base_date, base_time = _ultra_srt_base()
     resp = _request("getUltraSrtNcst", {
@@ -196,6 +232,7 @@ def get_current(lat: float | None = None, lon: float | None = None) -> dict:
         "nx": nx, "ny": ny,
     })
     if resp is None:
+        _fail_cache_put("getUltraSrtNcst", nx, ny)
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류"}
 
     values = {}
@@ -229,6 +266,8 @@ def get_forecast_3d(lat: float | None = None, lon: float | None = None) -> dict:
     cached = _cache_get("getVilageFcst", nx, ny)
     if cached is not None:
         return cached
+    if _fail_cache_hit("getVilageFcst", nx, ny):
+        return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류(잠시 후 재시도)"}
 
     base_date, base_time = _vilage_fcst_base()
     resp = _request("getVilageFcst", {
@@ -236,6 +275,7 @@ def get_forecast_3d(lat: float | None = None, lon: float | None = None) -> dict:
         "nx": nx, "ny": ny,
     })
     if resp is None:
+        _fail_cache_put("getVilageFcst", nx, ny)
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류"}
 
     daily: dict[str, dict] = {}
