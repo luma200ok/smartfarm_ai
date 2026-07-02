@@ -175,6 +175,64 @@ def render():
             r = vs.reading()
             st.markdown(f"📅 **{vs.date()}** · 내부 {r['온도내부_평균']:.1f}℃ · 습도 {r['습도내부_평균']:.0f}% "
                         f"· CO₂ {r['co2_평균']:.0f} · 외부 {r['온도외부_평균']:.1f}℃")
+
+            # ── 🌤 외부 날씨 (기상청 실황) — 가상센서(과거 replay)와 실시간 외기를 나란히 대비 ──
+            st.markdown("##### 🌤 외부 날씨 (기상청 실황)")
+            st.caption("⚠️ 가상센서는 과거 특정 연도 재생(위 날짜)이고, 아래 외기는 실시간이라 날짜가 다를 수 있어요"
+                       "(데모 목적 병렬 표시).")
+
+            from llm import weather as kma_weather
+
+            wcol1, wcol2 = st.columns([3, 1])
+            with wcol2:
+                if st.button("🔄 새로고침", use_container_width=True):
+                    kma_weather.clear_cache()
+
+            def _v(x, unit=""):
+                """관측값 None(누락) → '-' 표시(예: 'None℃' 노출 방지)."""
+                return "-" if x is None else f"{x}{unit}"
+
+            try:                                          # 안전망 이중화 — UI가 죽지 않게
+                current = kma_weather.get_current()
+            except Exception:
+                current = {"unavailable": True, "reason": "날씨 조회 중 오류"}
+            if current.get("unavailable"):
+                st.caption(f"ℹ️ 외부 날씨 조회 불가 — {current.get('reason', '알 수 없는 오류')}")
+            else:
+                st.markdown(f"외기 **{_v(current['temp'], '℃')}** · 습도 **{_v(current['humidity'], '%')}** "
+                            f"· 강수 **{_v(current['rain'], 'mm')}** (내부 {r['온도내부_평균']:.1f}℃ · "
+                            f"습도 {r['습도내부_평균']:.0f}% 와 비교)")
+
+            try:                                          # 안전망 이중화 — UI가 죽지 않게
+                fcst = kma_weather.get_forecast_3d()
+            except Exception:
+                fcst = {"unavailable": True, "reason": "날씨 조회 중 오류"}
+            if fcst.get("unavailable"):
+                st.caption(f"ℹ️ 3일 예보 조회 불가 — {fcst.get('reason', '알 수 없는 오류')}")
+            else:
+                daily = fcst.get("daily") or []
+                if daily:
+                    st.dataframe(
+                        [{"날짜": d["date"], "최저(℃)": d["tmn"], "최고(℃)": d["tmx"]} for d in daily],
+                        hide_index=True, use_container_width=True,
+                    )
+                hourly = fcst.get("hourly") or []
+                if hourly:
+                    import pandas as pd
+                    chart_df = pd.DataFrame(hourly)[["date", "time", "temp"]]
+                    chart_df["시각"] = chart_df["date"] + " " + chart_df["time"]
+                    st.line_chart(chart_df.set_index("시각")["temp"])
+
+            st.markdown("###### 💬 날씨 질문")
+            weather_q = st.text_input("궁금한 점을 물어보세요", value="",
+                                       placeholder="내일 밤 기온 괜찮을까?", key="weather_qa_input")
+            if st.button("날씨 질문", key="weather_qa_btn"):
+                from llm import pipeline as llm_pipeline
+                with st.spinner("날씨 확인 중…"):
+                    st.session_state["weather_qa_answer"] = llm_pipeline.weather_qa(weather_q or "오늘 날씨 어때?")
+            if "weather_qa_answer" in st.session_state:
+                st.markdown(st.session_state["weather_qa_answer"])
+
             fc = infer.forecast(live)
             if fc:
                 st.markdown(f"**→ 다음날 예측** {fc['next_temp']}℃ ({fc['trend']}) · "

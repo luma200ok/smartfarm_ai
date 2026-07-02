@@ -63,3 +63,36 @@ def test_get_forecast_uses_explicit_window(monkeypatch):
                                    "recent_temp": 24.0, "humidity_mean": 88.0})
     r = tools.get_forecast(np.zeros((7, 8), dtype="float32"))
     assert r["next_temp"] == 22.0 and r["humidity_risk"] == "높음"
+
+
+def test_get_weather_registered_in_tool_registry_and_schemas():
+    assert tools.TOOL_REGISTRY["get_weather"] is tools.get_weather
+    names = {s["function"]["name"] for s in tools.TOOL_SCHEMAS}
+    assert "get_weather" in names
+
+
+def test_get_weather_current_delegates_to_weather_module(monkeypatch):
+    monkeypatch.setattr(tools.weather, "get_current", lambda: {"unavailable": False, "temp": 20.0})
+    r = tools.get_weather("current")
+    assert r == {"unavailable": False, "temp": 20.0}
+
+
+def test_get_weather_forecast_delegates_to_weather_module(monkeypatch):
+    monkeypatch.setattr(tools.weather, "get_forecast_3d", lambda: {"unavailable": False, "daily": []})
+    r = tools.get_weather("forecast")
+    assert r == {"unavailable": False, "daily": []}
+
+
+def test_get_weather_default_kind_is_forecast(monkeypatch):
+    calls = []
+    monkeypatch.setattr(tools.weather, "get_forecast_3d", lambda: calls.append("forecast") or {"unavailable": False})
+    tools.get_weather()
+    assert calls == ["forecast"]
+
+
+def test_get_weather_swallows_exceptions(monkeypatch):
+    def _boom():
+        raise RuntimeError("boom")
+    monkeypatch.setattr(tools.weather, "get_current", _boom)
+    r = tools.get_weather("current")
+    assert r["unavailable"] is True
