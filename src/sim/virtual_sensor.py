@@ -73,6 +73,15 @@ class VirtualSensor:
             self.cursor = WINDOW - 1
         return self.date()
 
+    def seek(self, target: str | int) -> str:
+        """날짜 문자열(또는 인덱스)로 커서를 직접 이동.
+
+        범위를 벗어나면 WINDOW-1 ~ len(series)-1 로 클램프해 최근 7일 창 확보를 유지한다.
+        """
+        idx = self.dates.index(target) if isinstance(target, str) else int(target)
+        self.cursor = min(max(idx, WINDOW - 1), len(self.series) - 1)
+        return self.date()
+
     @property
     def farm(self) -> tuple:
         return self.key

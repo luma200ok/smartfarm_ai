@@ -81,7 +81,8 @@ def render():
         else:
             from llm import tools
             from llm.prescribe import prescribe
-            with st.spinner(f"DL 진단 + LLM 처방 생성 중… ({MODEL} — 환경에 따라 수십 초~2분 걸릴 수 있어요)"):
+            with st.spinner(f"DL 진단 + LLM 처방 생성 중… ({MODEL} — 환경에 따라 수십 초~2분 걸릴 수 있어요) "
+                             f"(생성 중 다른 버튼을 누르면 취소돼요)"):
                 st.session_state["last_diag"] = tools.get_diagnosis(image_path)
                 st.session_state["last_presc"] = prescribe(question, image_path=image_path)
 
@@ -150,10 +151,25 @@ def render():
                 st.warning(f"이 작기는 재생할 수 없어요: {e}")
                 vs = None
         if vs is not None:
+            # 슬라이더 key는 연도별로 분리 — 연도 바뀌면 새 vs.date()로 자연 초기화됨
+            date_key = f"vsensor_date_{year}"
+            if date_key not in st.session_state:
+                st.session_state[date_key] = vs.date()
+
+            def _on_seek_change():
+                """슬라이더 이동 → 커서 seek (버튼과 동일한 vs 인스턴스 공유)."""
+                vs.seek(st.session_state[date_key])
+
             with bcol:
                 st.write("")
                 if st.button("다음 날 ▶", use_container_width=True):
                     vs.tick()
+                    st.session_state[date_key] = vs.date()   # 슬라이더 위젯 상태도 함께 갱신
+
+            st.select_slider(
+                "📅 날짜로 이동", options=vs.dates[infer.WINDOW - 1:],
+                key=date_key, on_change=_on_seek_change,
+            )
 
             live = vs.window()                       # 이 시점 창을 코치·경보에 명시 전달(전역 상태 X)
             r = vs.reading()

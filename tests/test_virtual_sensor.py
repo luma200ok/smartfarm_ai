@@ -59,3 +59,27 @@ def test_raises_when_insufficient_data(monkeypatch):
     monkeypatch.setattr(vsmod, "_tomato_df", _too_short)
     with pytest.raises(ValueError):
         vsmod.VirtualSensor(2024)
+
+
+def test_seek_moves_to_target_date(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    target = vs.dates[9]
+    assert vs.seek(target) == target
+    assert vs.date() == target
+
+
+def test_seek_clamps_out_of_range(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    vs.seek(-100)
+    assert vs.cursor == vsmod.WINDOW - 1
+    vs.seek(9999)
+    assert vs.cursor == len(vs.series) - 1
+
+
+def test_seek_keeps_window_length(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    vs.seek(vs.dates[5])
+    assert vs.window().shape == (vsmod.WINDOW, len(infer.ENV_FEATURES))
