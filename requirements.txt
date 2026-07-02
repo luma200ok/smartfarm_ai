@@ -26,3 +26,7 @@ python-dotenv       # 디스코드 웹훅 URL 등 시크릿 로딩(.env)
 requests            # 디스코드 Webhook 알림 발송 (Phase 3-4)
 pytest              # Phase 3-1 테스트 (tests/) — 진단·게이트·처방 로직 검증
 mlflow>=2.9
+
+# PostgreSQL + pgvector — RAG 저장소·처방/경보 이력 (선택, DATABASE_URL 미설정 시 미사용)
+psycopg[binary]      # psycopg3 — connect-per-call, 커넥션풀 미사용(연결 few ms)
+pgvector             # vector 타입 어댑터(register_vector) — aarch64 휠 제공

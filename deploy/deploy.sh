@@ -7,21 +7,32 @@ APP_DIR=/opt/smartfarm_ai
 UV="$HOME/.local/bin/uv"            # 비대화형 SSH는 PATH가 좁음 → 절대경로
 export PATH="$HOME/.local/bin:$PATH"
 
-echo "▶ [1/5] git pull"
+echo "▶ [1/6] git pull"
 cd "$APP_DIR"
 git fetch --quiet origin main
 git reset --hard origin/main        # 서버 로컬 변경 없음 전제 → 깔끔히 main에 정렬
 
-echo "▶ [2/5] deps 동기화 (requirements-deploy.txt)"
+echo "▶ [2/6] deps 동기화 (requirements-deploy.txt)"
 "$UV" pip install -q -r requirements-deploy.txt
 
-echo "▶ [3/5] SELinux 라벨 (새 파일 대비)"
+echo "▶ [3/6] PostgreSQL 스키마·RAG sync (DATABASE_URL 설정 시만, 실패해도 배포 계속)"
+# source 대신 값만 추출 — 비밀번호에 $/백틱이 있어도 셸 확장·명령 실행 없이 안전
+DATABASE_URL="$(grep -m1 '^DATABASE_URL=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+if [ -n "$DATABASE_URL" ]; then
+  psql "$DATABASE_URL" -f db/schema.sql || echo "⚠️ 스키마 적용 실패 — 계속 진행"
+  # sync는 db.py가 자체적으로 .env를 load_dotenv 하므로 env 전달 불필요
+  PYTHONPATH="$APP_DIR/src" "$UV" run python -m llm.rag.sync || echo "⚠️ RAG sync 실패 — 계속 진행"
+else
+  echo "   DATABASE_URL 미설정 — 스킵(memory 백엔드로 계속)"
+fi
+
+echo "▶ [4/6] SELinux 라벨 (새 파일 대비)"
 sudo restorecon -RF "$APP_DIR" || true
 
-echo "▶ [4/5] 서비스 재시작"
+echo "▶ [5/6] 서비스 재시작"
 sudo systemctl restart smartfarm-ai
 
-echo "▶ [5/5] 헬스체크"
+echo "▶ [6/6] 헬스체크"
 for i in $(seq 1 10); do
   if curl -fsS http://127.0.0.1:8501/_stcore/health >/dev/null; then
     echo "✅ 배포 성공 (health ok)"

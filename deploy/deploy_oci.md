@@ -106,6 +106,48 @@ sudo systemctl restart smartfarm
 ```
 모델이 바뀌면 3번 rsync 재실행.
 
+## 8. PostgreSQL 16 + pgvector (선택 — RAG_BACKEND=pgvector 쓸 때만)
+
+Docker 미사용 전제라 **dnf(Oracle Linux)로 직접 설치**. 실 운영 경로는 `/opt/smartfarm_ai`
+(GitHub Actions가 `bash /opt/smartfarm_ai/deploy/deploy.sh` 호출) — 아래는 그 기준.
+> 서버가 Ubuntu면 `dnf` 대신 `apt`(postgresql-16, postgresql-16-pgvector 패키지명 확인) 로 치환.
+
+```bash
+# PGDG repo 등록 + 설치
+sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm
+sudo dnf install -y postgresql16-server pgvector_16
+
+# 최초 1회 initdb + 기동
+sudo /usr/pgsql-16/bin/postgresql-16-setup initdb
+sudo systemctl enable --now postgresql-16
+systemctl status postgresql-16                 # active (running) 확인
+```
+
+앱 유저·DB·확장 생성 (superuser로 `CREATE EXTENSION`까지 선행 — schema.sql의 동일 구문은 멱등 no-op):
+```bash
+sudo -u postgres psql <<'SQL'
+CREATE USER smartfarm WITH PASSWORD '<강한 비밀번호>';
+CREATE DATABASE smartfarm OWNER smartfarm;
+\c smartfarm
+CREATE EXTENSION IF NOT EXISTS vector;
+SQL
+```
+
+서버 `.env`(기존 시크릿 관리 방식과 동일 — git에 올리지 않음)에 추가:
+```
+RAG_BACKEND=pgvector
+DATABASE_URL=postgresql://smartfarm:<비밀번호>@localhost:5432/smartfarm
+```
+> ⚠️ env 변경은 **프로세스 재시작 후에만 반영**(`sudo systemctl restart smartfarm-ai`).
+
+접속은 localhost 전용(방화벽/Caddy 무변경 — 5432는 외부에 열지 않음).
+이후 `deploy.sh` 재배포 시 `.env`에 `DATABASE_URL`이 있으면 스키마 적용(`db/schema.sql`)과
+RAG 코퍼스 적재(`python -m llm.rag.sync`)가 자동 실행된다(실패해도 배포는 계속됨).
+
+**장애 폴백 확인**: `sudo systemctl stop postgresql-16` 후 처방 실행 → npz 폴백으로 정상 응답(3초 타임아웃 내) 확인.
+
+---
+
 ## 트러블슈팅
 > 아래는 운영 중 빠른 대응 FAQ. **배포 당시 실제 겪은 문제 전체 기록은 [트러블슈팅 내역](../docs/troubleshooting/troubleshooting.md) §C 참고.**
 

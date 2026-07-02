@@ -20,7 +20,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from dl import infer  # noqa: E402
-from llm import notify  # noqa: E402
+from llm import history, notify  # noqa: E402
 from sim.virtual_sensor import VirtualSensor  # noqa: E402
 
 _log = logging.getLogger(__name__)
@@ -106,6 +106,8 @@ def run(year=None, interval=1.0, loop=False, use_llm=False, max_days=None) -> in
             ok, msg = notify.send_discord(_embed(a, reading, date, use_llm, window))
             if not ok:
                 active.discard(_akey(a))              # 전송 실패 → 다음 틱 재시도(유실 방지)
+            history.save_alert("monitor", a["level"], a["disease"], a["reason"],
+                               {**a, "reading": reading, "date": str(date), "sent": ok})
             print(f"    🚨 [{a['level']}] {a['reason']} → 디스코드 {'전송됨' if ok else msg}")
         steps += 1
         if (max_days and steps >= max_days) or (not loop and steps >= total):

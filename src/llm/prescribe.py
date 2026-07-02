@@ -29,6 +29,7 @@ _SRC = Path(__file__).resolve().parents[1]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from llm import history  # noqa: E402
 from llm.rag import retrieve  # noqa: E402
 from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS, get_forecast  # noqa: E402
 
@@ -185,14 +186,17 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
+            history.save_prescription(user_msg, image_path, diag, presc)
             return presc
         except ValidationError as e:
             last_err = e
             messages.append({"role": "system",
                              "content": "직전 출력이 스키마와 맞지 않았다. 반드시 지정된 JSON 스키마로만 다시 출력하라."})
     _log.warning("구조화 출력 검증 실패 — 안전 폴백 반환: %s", last_err)
-    return Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
+    presc = Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
                         원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources)
+    history.save_prescription(user_msg, image_path, diag, presc)
+    return presc
 
 
 if __name__ == "__main__":

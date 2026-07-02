@@ -18,3 +18,7 @@ torchvision>=0.17
 ultralytics>=8.3         # YOLOv8 검출 (phase2_dl.load_yolo)
 Pillow                   # PIL — 이미지 업로드/전처리
 matplotlib               # phase2_dl Grad-CAM 컬러맵(직접 import) — ultralytics 경유 말고 명시
+
+# Phase 3+ — PostgreSQL + pgvector (RAG 저장소·처방/경보 이력, DATABASE_URL 미설정 시 미사용)
+psycopg[binary]
+pgvector

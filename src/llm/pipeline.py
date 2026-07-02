@@ -18,6 +18,7 @@ _SRC = Path(__file__).resolve().parents[1]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from llm import history  # noqa: E402
 from llm.prescribe import MODEL  # noqa: E402  (동일 Ollama 모델·.env 로드 재사용)
 from llm.rag import retrieve  # noqa: E402
 from llm.tools import get_forecast  # noqa: E402
@@ -82,7 +83,9 @@ def early_warning(window=None) -> Warning:
                                         "이 조건에서 토마토 병해 조기경보를 판단해줘."}]
     resp = ollama.chat(model=MODEL, messages=msg, format=Warning.model_json_schema())
     try:
-        return Warning.model_validate_json(resp["message"]["content"])
+        w = Warning.model_validate_json(resp["message"]["content"])
+        history.save_alert("early_warning", w.경보수준, w.위험병해, w.이유, w.model_dump())
+        return w
     except ValidationError as e:
         _log.warning("Warning 스키마 검증 실패: %s", e)
         return Warning(경보수준="정상", 위험병해="없음", 이유="판단 실패", 권장조치="잠시 후 재시도")
