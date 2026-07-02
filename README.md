@@ -96,6 +96,7 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 - ✅ **3-3 통합** — LSTM 환경예측(get_forecast, 다음날 내부온도 MAE 1.11℃) 실연동 → **시간축 처방**(고습 예측 시 환기) + **일일 코치·조기 경보**.
 - ✅ **3-4 알림** — 조기경보·처방을 **디스코드 Webhook**으로 발송(수동 버튼, 기존 smartfarm 웹훅 재사용).
 - ✅ **센서 자동 감시** — `python src/llm/monitor.py --year 2024 --interval 1` : 규칙 임계값(습도≥90·온도≥35/≤5) 위험 시 **자동** 디스코드 알림(중복 방지). `.env`에 `DISCORD_WEBHOOK_URL` 필요.
+- ✅ **PostgreSQL + pgvector(선택)** — `RAG_BACKEND=pgvector`면 RAG 검색이 npz 대신 PG(`rag_chunks`)를 쓰고, 처방·경보가 `prescriptions`/`alerts`에 이력으로 남는다. 기본은 `memory`(현행 npz, PG 불필요)이고 `DATABASE_URL` 미설정 시 완전히 비활성. pgvector 조회 실패 시 자동으로 memory 경로로 폴백(예외 전파 없음). 로컬 개발은 그대로 가볍게, 서버(OCI)만 풀 구성 — 자세한 설치는 `deploy/deploy_oci.md` §8.
 
 **실행:** `streamlit run app/streamlit_app.py` → Phase 3 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
 
