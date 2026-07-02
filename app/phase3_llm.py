@@ -151,6 +151,17 @@ def render():
                 st.warning(f"이 작기는 재생할 수 없어요: {e}")
                 vs = None
         if vs is not None:
+            from sim.virtual_sensor import SCENARIOS, apply_scenario
+
+            # 이슈 #6 PR-2 데모 — 정상/한파/히터고장 프리셋으로 원인 구분 경보 시연
+            scen_key = f"vsensor_scenario_{year}"
+            scenario = st.selectbox("🧪 시뮬 시나리오", SCENARIOS,
+                                     key=scen_key,
+                                     help="한파=외기·내부 모두 급락(외기 요인) · 히터고장=외기는 그대로인데 내부만 급락(설비 고장 의심)")
+            if st.session_state.get(f"{scen_key}_applied") != scenario:
+                apply_scenario(vs, scenario)
+                st.session_state[f"{scen_key}_applied"] = scenario
+
             # 슬라이더 key는 연도별로 분리 — 연도 바뀌면 새 vs.date()로 자연 초기화됨
             date_key = f"vsensor_date_{year}"
             if date_key not in st.session_state:
@@ -159,11 +170,13 @@ def render():
             def _on_seek_change():
                 """슬라이더 이동 → 커서 seek (버튼과 동일한 vs 인스턴스 공유)."""
                 vs.seek(st.session_state[date_key])
+                apply_scenario(vs, st.session_state[scen_key])   # 이동해도 같은 시나리오 유지
 
             with bcol:
                 st.write("")
                 if st.button("다음 날 ▶", use_container_width=True):
                     vs.tick()
+                    apply_scenario(vs, scenario)
                     st.session_state[date_key] = vs.date()   # 슬라이더 위젯 상태도 함께 갱신
 
             st.select_slider(
@@ -175,6 +188,42 @@ def render():
             r = vs.reading()
             st.markdown(f"📅 **{vs.date()}** · 내부 {r['온도내부_평균']:.1f}℃ · 습도 {r['습도내부_평균']:.0f}% "
                         f"· CO₂ {r['co2_평균']:.0f} · 외부 {r['온도외부_평균']:.1f}℃")
+
+            # ── 🔎 원인 구분 경보 (expect.py 기대값 vs 실측) ──────────────────
+            from llm import expect as expect_mod
+            from llm import monitor as monitor_mod
+
+            expect_model = expect_mod.load_model()
+            if expect_model is None:
+                st.caption("ℹ️ 기대값 모델(models/env_expect_reg.pkl) 없음 — 원인 구분 비활성(임계 경보만).")
+            exp = expect_mod.predict(expect_model, r, vs.date()) if expect_model else None
+            alerts = monitor_mod.assess(r, exp)
+            if alerts:
+                for a in alerts:
+                    box = {"경고": st.error, "주의": st.warning}.get(a["level"], st.info)
+                    cause_txt = f" · 추정 원인: {a['cause']}" if a.get("cause") else ""
+                    box(f"[{a['level']}] {a['reason']}{cause_txt}")
+            else:
+                st.caption("정상 범위 — 경보 없음")
+
+            if exp is not None:
+                import pandas as pd
+                win_dates = vs.dates[vs.cursor - infer.WINDOW + 1: vs.cursor + 1]
+                rows = []
+                for i, d in enumerate(win_dates):
+                    day_reading = {"온도외부_평균": float(live[i][infer.ENV_FEATURES.index("온도외부_평균")]),
+                                   "일사량_평균": float(live[i][infer.ENV_FEATURES.index("일사량_평균")])}
+                    day_exp = expect_mod.predict(expect_model, day_reading, d)
+                    actual = float(live[i][infer.ENV_FEATURES.index("온도내부_평균")])
+                    if day_exp is not None:
+                        sigma = day_exp["resid_sigma"].get("평균", 0.0)
+                        rows.append({"날짜": d, "실측": actual, "기대값": day_exp["평균"],
+                                     "상단(+2σ)": day_exp["평균"] + 2 * sigma,
+                                     "하단(-2σ)": day_exp["평균"] - 2 * sigma})
+                if rows:
+                    chart_df = pd.DataFrame(rows).set_index("날짜")
+                    st.caption("최근 7일 실측 vs 기대값(±2σ 밴드) — 밴드 이탈이 클수록 설비 이상 가능성↑")
+                    st.line_chart(chart_df[["실측", "기대값", "상단(+2σ)", "하단(-2σ)"]])
 
             # ── 🌤 외부 날씨 (기상청 실황) — 가상센서(과거 replay)와 실시간 외기를 나란히 대비 ──
             st.markdown("##### 🌤 외부 날씨 (기상청 실황)")
@@ -224,6 +273,33 @@ def render():
                     chart_df = pd.DataFrame(hourly)[["date", "time", "temp"]]
                     chart_df["시각"] = chart_df["date"] + " " + chart_df["time"]
                     st.line_chart(chart_df.set_index("시각")["temp"])
+
+                if expect_model is not None:
+                    from llm import monitor as ff_monitor
+                    ff = ff_monitor.feedforward_alerts(fcst.get("daily") or [], expect_model=expect_model)
+                    if ff:
+                        for a in ff:
+                            st.warning(f"🔮 사전 경보(실시간 예보) — {a['reason']}")
+
+            # ── 🔮 리플레이 선견 예보 — 가상센서 커서+1~3일 실제 외기를 예보처럼 사용 ──
+            if expect_model is not None and vs.cursor + 1 < len(vs.series):
+                st.markdown("##### 🔮 리플레이 선견 예보 (가상센서, 실 예보 아님)")
+                st.caption("가상센서가 재생 중인 미래 1~3일 실외기를 KMA 예보처럼 흉내낸 데모용 사전 경보입니다"
+                           "(실제 미래를 미리 아는 리플레이 특유 트릭 — 날짜 불일치 방지).")
+                replay_daily = []
+                for k in range(1, 4):
+                    idx = vs.cursor + k
+                    if idx >= len(vs.series):
+                        break
+                    outer = float(vs.series[idx][infer.ENV_FEATURES.index("온도외부_평균")])
+                    replay_daily.append({"date": vs.dates[idx], "tmn": outer - 2.0, "tmx": outer + 2.0})
+                from llm import monitor as replay_monitor
+                replay_ff = replay_monitor.feedforward_alerts(replay_daily, expect_model=expect_model)
+                if replay_ff:
+                    for a in replay_ff:
+                        st.warning(f"🔮 리플레이 사전 경보 — {a['reason']}")
+                else:
+                    st.caption("리플레이 선견 구간 — 사전 경보 없음(정상 범위)")
 
             st.markdown("###### 💬 날씨 질문")
             weather_q = st.text_input("궁금한 점을 물어보세요", value="",

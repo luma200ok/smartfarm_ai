@@ -54,14 +54,42 @@ class VirtualSensor:
         self.series, self.dates, self.key = best
         self.year = year
         self.cursor = WINDOW - 1          # 예측 가능한 첫 시점(최근 7일 확보)
+        self._injections: list[dict] = []   # 시뮬 주입(오프셋) — 원본 series는 불변
+
+    def inject(self, feature: str, start, days: int, delta: float) -> None:
+        """feature(예: 온도외부_평균)에 start(날짜 또는 인덱스)부터 days일간 delta를 더한다.
+
+        원본 self.series는 변경하지 않고 reading()/window() 반환값에만 적용(read-time overlay)."""
+        idx = self.dates.index(start) if isinstance(start, str) else int(start)
+        self._injections.append({"feature": feature, "start": idx, "end": idx + days - 1, "delta": delta})
+
+    def clear_injections(self) -> None:
+        """주입 전부 해제 — '정상' 시나리오로 복귀."""
+        self._injections = []
+
+    def _apply_injections(self, arr: np.ndarray, abs_indices: list[int]) -> np.ndarray:
+        if not self._injections:
+            return arr
+        out = arr.copy()
+        feat_idx = {f: i for i, f in enumerate(infer.ENV_FEATURES)}
+        for row, abs_i in enumerate(abs_indices):
+            for inj in self._injections:
+                if inj["start"] <= abs_i <= inj["end"]:
+                    fi = feat_idx.get(inj["feature"])
+                    if fi is not None:
+                        out[row, fi] += inj["delta"]
+        return out
 
     def window(self) -> np.ndarray:
-        """현재 시점 기준 최근 WINDOW일 (7,8) — forecast 입력."""
-        return self.series[self.cursor - WINDOW + 1: self.cursor + 1]
+        """현재 시점 기준 최근 WINDOW일 (7,8) — forecast 입력(주입 반영)."""
+        lo = self.cursor - WINDOW + 1
+        base = self.series[lo: self.cursor + 1]
+        return self._apply_injections(base, list(range(lo, self.cursor + 1)))
 
     def reading(self) -> dict:
-        """현재 시점의 센서 관측값(피처별)."""
-        return {f: float(v) for f, v in zip(infer.ENV_FEATURES, self.series[self.cursor])}
+        """현재 시점의 센서 관측값(피처별, 주입 반영)."""
+        row = self._apply_injections(self.series[self.cursor: self.cursor + 1], [self.cursor])[0]
+        return {f: float(v) for f, v in zip(infer.ENV_FEATURES, row)}
 
     def date(self) -> str:
         return self.dates[self.cursor]
@@ -85,3 +113,22 @@ class VirtualSensor:
     @property
     def farm(self) -> tuple:
         return self.key
+
+
+# 이슈 #6 PR-2 데모 프리셋 — Streamlit 시나리오 selectbox에서 사용.
+# "한파": 외기·내부 모두 급락(잔차는 작음) → cause=외기 요인.
+# "히터고장": 외기는 그대로인데 내부만 급락(잔차 큼) → cause=설비 고장 의심.
+SCENARIOS = ("정상", "한파", "히터고장")
+
+
+def apply_scenario(vs: "VirtualSensor", name: str, days: int = 3) -> None:
+    """vs 현재 커서 기준으로 프리셋 주입(먼저 기존 주입을 모두 해제)."""
+    vs.clear_injections()
+    if name == "한파":
+        vs.inject("온도외부_평균", vs.cursor, days, -10.0)
+        vs.inject("온도내부_평균", vs.cursor, days, -5.0)
+        vs.inject("온도내부_최저", vs.cursor, days, -5.0)
+    elif name == "히터고장":
+        vs.inject("온도내부_평균", vs.cursor, days, -8.0)
+        vs.inject("온도내부_최저", vs.cursor, days, -8.0)
+    # "정상"은 clear_injections()만으로 충분

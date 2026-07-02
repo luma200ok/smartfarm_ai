@@ -83,3 +83,69 @@ def test_seek_keeps_window_length(monkeypatch):
     vs = vsmod.VirtualSensor(2024)
     vs.seek(vs.dates[5])
     assert vs.window().shape == (vsmod.WINDOW, len(infer.ENV_FEATURES))
+
+
+def test_inject_applies_delta_to_reading_and_window(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    before = vs.reading()["온도외부_평균"]
+    vs.inject("온도외부_평균", vs.cursor, 3, -10.0)
+    assert vs.reading()["온도외부_평균"] == before - 10.0
+    assert vs.window()[-1][infer.ENV_FEATURES.index("온도외부_평균")] == before - 10.0
+
+
+def test_inject_does_not_mutate_original_series(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    original = vs.series.copy()
+    vs.inject("온도외부_평균", vs.cursor, 3, -10.0)
+    vs.reading()
+    vs.window()
+    assert (vs.series == original).all()
+
+
+def test_inject_expires_after_days(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    before = vs.reading()["온도외부_평균"]
+    vs.inject("온도외부_평균", vs.cursor, 1, -10.0)   # 1일만 적용
+    assert vs.reading()["온도외부_평균"] == before - 10.0
+    vs.tick()
+    assert vs.reading()["온도외부_평균"] != vs.series[vs.cursor][infer.ENV_FEATURES.index("온도외부_평균")] - 10.0
+
+
+def test_clear_injections_restores_original_reading(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    before = vs.reading()["온도외부_평균"]
+    vs.inject("온도외부_평균", vs.cursor, 3, -10.0)
+    vs.clear_injections()
+    assert vs.reading()["온도외부_평균"] == before
+
+
+def test_apply_scenario_heater_failure_only_changes_internal_temp(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    outer_before = vs.reading()["온도외부_평균"]
+    inner_before = vs.reading()["온도내부_평균"]
+    vsmod.apply_scenario(vs, "히터고장")
+    assert vs.reading()["온도외부_평균"] == outer_before        # 외기 불변
+    assert vs.reading()["온도내부_평균"] == inner_before - 8.0    # 내부만 급락
+
+
+def test_apply_scenario_cold_snap_changes_both(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    outer_before = vs.reading()["온도외부_평균"]
+    inner_before = vs.reading()["온도내부_평균"]
+    vsmod.apply_scenario(vs, "한파")
+    assert vs.reading()["온도외부_평균"] == outer_before - 10.0
+    assert vs.reading()["온도내부_평균"] == inner_before - 5.0
+
+
+def test_apply_scenario_normal_clears_injections(monkeypatch):
+    monkeypatch.setattr(vsmod, "_tomato_df", _one_farm)
+    vs = vsmod.VirtualSensor(2024)
+    vsmod.apply_scenario(vs, "히터고장")
+    vsmod.apply_scenario(vs, "정상")
+    assert vs._injections == []
