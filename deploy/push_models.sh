@@ -14,7 +14,13 @@ rsync -avz \
   models/tomato_resnet18.pt \
   models/tomato_yolov8n.pt \
   models/tomato_part.pt \
+  models/env_lstm.pt \
   "${HOST}:${DEST}"
+
+# 가상센서·LSTM 예측용 환경 시계열(git 제외) — 없으면 Phase3 코치·경보 섹션이 비활성
+echo "▶ 환경 데이터 전송 → ${HOST}:/opt/smartfarm_ai/data/processed/"
+ssh "${HOST}" 'mkdir -p /opt/smartfarm_ai/data/processed'
+rsync -avz data/processed/env_daily.csv "${HOST}:/opt/smartfarm_ai/data/processed/"
 
 echo "▶ 서비스 재시작"
 ssh "${HOST}" 'sudo systemctl restart smartfarm-ai'
