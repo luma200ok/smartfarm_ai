@@ -25,7 +25,7 @@
 |---|---|---|---|---|
 | **1. ML** | 환경 센서 → 작물 9종 분류 (2022~24 다년) | RandomForest·XGBoost | test F1 0.68 · **GKF 0.49**(누수 교훈) | ✅ 완료 |
 | **2. DL** | 잎 사진 진단(CNN·YOLO) + 환경 시계열(LSTM) | PyTorch·전이학습·Grad-CAM·MLflow | 진단 acc **0.97** · YOLO 0.78 · LSTM 1.18℃ | ✅ 완료 |
-| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보 | Ollama(qwen2.5:14b)·function calling·RAG(bge-m3) | 처방+**근거 인용**+환경 교차·코치·경보 | 🔵 3-1~3-3 완료(3-4 알림 예정) |
+| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보·알림 | Ollama(qwen2.5:14b)·function calling·RAG(bge-m3)·디스코드 | 처방+**근거 인용**+환경 교차·코치·경보·**디스코드 알림** | ✅ 완료 |
 
 > 아래 **Phase별 블록을 하나씩 펼쳐** 핵심 성과·그림·상세를 확인하세요.
 > 문서: [PRD](docs/prd.md) · [로드맵](docs/roadmap.md) · [설계 결정(ADR)](docs/decisions.md)
@@ -83,7 +83,7 @@
 
 ---
 
-## 💬 Phase 3 (LLM) — 자연어 처방·코치·경보 (3-1~3-3 완료)
+## 💬 Phase 3 (LLM) — 자연어 처방·코치·경보·알림 (✅ 완료)
 
 <details>
 <summary><b>구현 현황 · 목표 출력 — 펼쳐보기</b></summary>
@@ -94,7 +94,7 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 - ✅ **3-1 Ollama function calling** — 진단(get_diagnosis)·검출(get_detection) tool 호출 → 자연어 처방. **환각 방어 3종**(신뢰도 톤 분기·게이트 차단 안내·클래스 한정성).
 - ✅ **3-2 RAG(bge-m3)** — 농사로/NCPMS 재배가이드 검색 → 처방에 **근거 출처 인용**(코드 주입, 환각 배제).
 - ✅ **3-3 통합** — LSTM 환경예측(get_forecast, 다음날 내부온도 MAE 1.11℃) 실연동 → **시간축 처방**(고습 예측 시 환기) + **일일 코치·조기 경보**.
-- ⬜ **3-4 알림** — 디스코드 Webhook 발송(기존 smartfarm 웹훅 재사용).
+- ✅ **3-4 알림** — 조기경보·처방을 **디스코드 Webhook**으로 발송(수동 버튼, 기존 smartfarm 웹훅 재사용).
 
 **실행:** `streamlit run app/streamlit_app.py` → Phase 3 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
 

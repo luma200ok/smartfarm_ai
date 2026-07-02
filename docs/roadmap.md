@@ -70,11 +70,11 @@
 
 > 청크 상세 = `_local/concepts/DL_devlog.md` · 이론 = `DL.md`.
 
-### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ⚪ 예정
+### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ✅ 완료
 - ✅ 3-1 Ollama(qwen2.5:14b) 연동 (숫자·라벨 → 자연어 처방, function calling + 환각방어 3종)
 - ✅ 3-2 재배지식 RAG (농사로/NCPMS 가이드 검색 → 근거 인용, bge-m3 임베딩)
 - ✅ 3-3 통합 파이프라인 (LSTM 환경예측 실연동 + 시간축 처방 + 일일코치·조기경보)
-- ⬜ 3-4 알림(디스코드 Webhook) + Streamlit 대시보드
+- ✅ 3-4 알림(디스코드 Webhook) — 경보·처방 발송(수동 버튼) + Streamlit 대시보드
 - 🏁 **Phase 3 끝 = 사진+센서 → 자연어 처방 + 알림**
 
 ---
