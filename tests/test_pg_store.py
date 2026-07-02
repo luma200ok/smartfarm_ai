@@ -134,3 +134,39 @@ def test_integration_search_disease_scope(monkeypatch, pg_conn):
 
     out_empty = pgs.search("q", disease="tylcv", k=3)
     assert out_empty == []
+
+
+@pytest.mark.integration
+def test_integration_sync_loads_corpus_and_is_idempotent(monkeypatch, pg_conn):
+    """sync.py — 코퍼스 적재 + 재실행 시 스킵(코퍼스 불변) + --force 강제 재적재."""
+    from llm.rag import sync as sync_mod
+
+    fake_chunks = [
+        {"text": "환기하라", "title": "가이드", "source": "", "source_name": "", "disease": "leaf_mold"},
+        {"text": "물을 준다", "title": "가이드2", "source": "", "source_name": "", "disease": "normal"},
+    ]
+    monkeypatch.setattr(sync_mod, "load_chunks", lambda: fake_chunks)
+    monkeypatch.setattr(sync_mod, "_embed", lambda texts: np.ones((len(texts), 1024), dtype="float32"))
+
+    n1 = sync_mod.sync()
+    assert n1 == 2
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM rag_chunks")
+        assert cur.fetchone()[0] == 2
+
+    n2 = sync_mod.sync()          # 코퍼스 불변 → 스킵
+    assert n2 == 0
+
+    n3 = sync_mod.sync(force=True)  # 강제 재적재
+    assert n3 == 2
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM rag_chunks")
+        assert cur.fetchone()[0] == 2   # DELETE 후 재삽입 — 중복 아님
+
+
+@pytest.mark.integration
+def test_integration_sync_no_database_url_raises(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    from llm.rag import sync as sync_mod
+    with pytest.raises(RuntimeError):
+        sync_mod.sync()
