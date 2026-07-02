@@ -15,6 +15,7 @@ rsync -avz \
   models/tomato_yolov8n.pt \
   models/tomato_part.pt \
   models/env_lstm.pt \
+  models/env_expect_reg.pkl \
   "${HOST}:${DEST}"
 
 # 가상센서·LSTM 예측용 환경 시계열(git 제외) — 없으면 Phase3 코치·경보 섹션이 비활성
