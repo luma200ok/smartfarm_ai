@@ -125,9 +125,10 @@ def test_doy_solar_climatology_covers_full_range(synth_df):
     assert all(v >= 0 for v in clim.values())
 
 
-def test_payload_schema_minimal(synth_df, tmp_path):
-    """실제 RF/XGB 풀 학습은 하지 않고, fit_full을 최소 모델(RF, n_estimators 축소)로만
-    호출해 payload 스키마(키 존재)를 검증한다."""
+def test_payload_schema_minimal(synth_df, tmp_path, monkeypatch):
+    """실제 RF/XGB 풀 학습은 하지 않고, 얕은 RF로 실제 파이프라인
+    (trim_outliers → second_pass_oof → fit_full)을 통과시켜
+    OOF 기반 resid_sigma 산출과 payload 스키마(키 존재)를 검증한다."""
     import ml.train_expect as te
 
     X, y_by_target, groups, features = build_xy(synth_df)
@@ -138,13 +139,19 @@ def test_payload_schema_minimal(synth_df, tmp_path):
         from sklearn.ensemble import RandomForestRegressor
         return {"RandomForest": RandomForestRegressor(n_estimators=10, random_state=42, n_jobs=1)}
 
-    orig_build_models = te.build_models
-    te.build_models = _light_models
-    try:
-        models = {name: fit_full("RandomForest", X_trim, y) for name, y in y_trim.items()}
-        resid_sigma = {name: float(np.std(y - models[name].predict(X_trim))) for name, y in y_trim.items()}
-    finally:
-        te.build_models = orig_build_models
+    monkeypatch.setattr(te, "build_models", _light_models)
+
+    # 실제 second_pass_oof 호출 — OOF 기반 resid_sigma·MAE 산출 검증
+    oof, resid_sigma, mae = te.second_pass_oof(X_trim, y_trim, groups_trim, "RandomForest")
+    for name in y_trim:
+        assert oof[name].shape == y_trim[name].shape
+        assert resid_sigma[name] > 0
+        assert mae[name] >= 0
+        # OOF 잔차 std와 일치해야 함(train 잔차 아님)
+        expected_sigma = float(np.std(y_trim[name] - oof[name]))
+        assert resid_sigma[name] == pytest.approx(expected_sigma, rel=1e-9)
+
+    models = {name: fit_full("RandomForest", X_trim, y) for name, y in y_trim.items()}
 
     from ml.train_expect import _doy_encode
     df_trim = _doy_encode(synth_df).loc[keep_mask].reset_index(drop=True)

@@ -34,9 +34,19 @@ FEATURES = ["온도외부_평균", "일사량_평균", "doy_sin", "doy_cos"]
 TARGETS = {"평균": "온도내부_평균", "최저": "온도내부_최저"}
 
 
+RAW_FEATURES = ["온도외부_평균", "일사량_평균"]  # doy_sin/cos 는 날짜에서 파생
+
+
 def load(data_path: str) -> pd.DataFrame:
     df = pd.read_csv(data_path, encoding="utf-8-sig")
     df = df[df["품목"].isin(TOMATO_CROPS)].copy()
+    # RF는 NaN에서 크래시 — 피처·타깃 컬럼 결측 행 제거 후 진행
+    required = RAW_FEATURES + list(TARGETS.values()) + ["날짜"]
+    before = len(df)
+    df = df.dropna(subset=required)
+    dropped = before - len(df)
+    if dropped:
+        print(f"  결측 제거 {dropped}행 (피처·타깃 NaN)")
     return df
 
 
@@ -70,8 +80,13 @@ def build_models():
     }
 
 
+def _n_splits(groups, n_splits=5):
+    """그룹 수가 5 미만인 소규모 데이터에서 GroupKFold 크래시 방지."""
+    return min(n_splits, len(np.unique(groups)))
+
+
 def _gkf_oof(model, X, y, groups, n_splits=5):
-    gkf = GroupKFold(n_splits)
+    gkf = GroupKFold(_n_splits(groups, n_splits))
     return cross_val_predict(model, X, y, cv=gkf, groups=groups, n_jobs=-1)
 
 
@@ -122,7 +137,7 @@ def compare_models(X, y_by_target, groups):
         maes = []
         for name, y in y_by_target.items():
             model = build_models()[model_name]
-            gkf = GroupKFold(5)
+            gkf = GroupKFold(_n_splits(groups))
             cv = cross_val_score(model, X, y, cv=gkf, groups=groups, scoring="neg_mean_absolute_error", n_jobs=-1)
             maes.append(-cv.mean())
         scores[model_name] = float(np.mean(maes))
@@ -132,7 +147,9 @@ def compare_models(X, y_by_target, groups):
 
 
 def compute_baselines(df_trim, y_by_target):
-    """3종 baseline MAE — 전체(트리밍 후) 데이터 대비 계산(리포트용, 폴드 분리 없음)."""
+    """3종 baseline MAE — 전체(트리밍 후) 데이터 대비 계산(리포트용, 폴드 분리 없음).
+    주의: doy기후평균은 같은 데이터로 만든 in-sample baseline이라 실제보다 유리하게 나온다
+    (모델 GKF OOF MAE와 직접 비교 시 baseline이 과대평가됨을 감안할 것)."""
     baselines = {}
     outer_temp = df_trim["온도외부_평균"].to_numpy(dtype=float)
     for name, y in y_by_target.items():
@@ -207,9 +224,9 @@ def plot_feature_importance(models, features, path):
 
 def main():
     parser = argparse.ArgumentParser(description="외기→실내 기대값 회귀 학습·평가")
-    parser.add_argument("--data", default="data/processed/env_daily.csv")
-    parser.add_argument("--out", default="models/env_expect_reg.pkl")
-    parser.add_argument("--figs", default="docs/figures/expect_regression")
+    parser.add_argument("--data", default=f"{ROOT}/data/processed/env_daily.csv")
+    parser.add_argument("--out", default=f"{ROOT}/models/env_expect_reg.pkl")
+    parser.add_argument("--figs", default=f"{ROOT}/docs/figures/expect_regression")
     parser.add_argument("--mlflow-uri", default=f"sqlite:///{ROOT}/mlflow.db")
     args = parser.parse_args()
 
@@ -243,6 +260,7 @@ def main():
     baselines = compute_baselines(df_trim, y_trim)
     for name, b in baselines.items():
         print(f"  {name}: " + ", ".join(f"{k}={v:.3f}" for k, v in b.items()))
+    print("  ※ doy기후평균 baseline은 in-sample(폴드 분리 없음) — 모델 OOF MAE보다 유리하게 측정됨")
 
     print("[7] doy 일사량 기후평균 계산")
     solar_clim = doy_solar_climatology(df_trim)
@@ -260,6 +278,7 @@ def main():
         "compare_scores": cmp_scores,
         "gkf_mae": gkf_mae,
         "baselines": baselines,
+        "baselines_note": "doy기후평균 baseline은 in-sample(폴드 분리 없음) — 모델 GKF OOF MAE 대비 유리하게 측정",
         "n_removed": n_removed,
         "n_total": int(len(keep_mask)),
         "removal_rate": n_removed / len(keep_mask),
