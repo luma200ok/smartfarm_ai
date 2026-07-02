@@ -1,15 +1,17 @@
 [Unit]
 Description=SmartFarm AI Streamlit (multipage, port 8501)
 # ⚠️ 유닛명은 반드시 smartfarm-ai — 이 서버의 기존 Java 백엔드 smartfarm.service 와 충돌 금지
-After=network-online.target
+# postgresql-16 은 부팅 순서만 뒤에 두고(RAG_BACKEND=pgvector일 때 사용) Requires는 걸지 않는다
+# — DATABASE_URL 미설정/PG 다운이어도 폴백 구조로 앱은 정상 기동해야 함.
+After=network-online.target postgresql-16.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=opc
-WorkingDirectory=/home/opc/smartfarm_ai
+WorkingDirectory=/opt/smartfarm_ai
 # 외부 노출은 Caddy(80/443)가 담당 → streamlit 은 루프백에만 바인딩
-ExecStart=/home/opc/smartfarm_ai/.venv/bin/streamlit run app/streamlit_app.py \
+ExecStart=/opt/smartfarm_ai/.venv/bin/streamlit run app/streamlit_app.py \
           --server.port 8501 \
           --server.address 127.0.0.1 \
           --server.headless true \
