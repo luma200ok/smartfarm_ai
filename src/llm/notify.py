@@ -12,7 +12,8 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+# override=True: 쉘 전역 env보다 프로젝트 .env가 우선 (전역에 다른 용도 웹훅이 있을 수 있음)
+load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=True)
 
 _log = logging.getLogger(__name__)
 _TIMEOUT = 10

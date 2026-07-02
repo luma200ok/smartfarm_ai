@@ -33,7 +33,7 @@ from llm.rag import retrieve  # noqa: E402
 from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS, get_forecast  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(ROOT / ".env")
+load_dotenv(ROOT / ".env", override=True)
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
 MAX_TOOL_ROUNDS = 4
