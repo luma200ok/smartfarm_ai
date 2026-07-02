@@ -72,17 +72,20 @@ def render():
         image_path = _resolve_image(uploaded, sample_key)
         if not image_path:
             st.error("이미지를 찾을 수 없어요.")
-            return
+        else:
+            from llm import tools
+            from llm.prescribe import prescribe
+            with st.spinner("DL 진단 + LLM 처방 생성 중… (로컬 14B, 20~40초 걸릴 수 있어요)"):
+                st.session_state["last_diag"] = tools.get_diagnosis(image_path)
+                st.session_state["last_presc"] = prescribe(question, image_path=image_path)
 
+    # 처방 결과 렌더(세션 보관 — rerun/전송 버튼에도 유지)
+    if "last_presc" in st.session_state:
         from dl import infer
-        from llm import tools
-        from llm.prescribe import prescribe
+        from llm import notify
+        diag = st.session_state["last_diag"]
+        presc = st.session_state["last_presc"]
 
-        with st.spinner("DL 진단 + LLM 처방 생성 중… (로컬 14B, 20~40초 걸릴 수 있어요)"):
-            diag = tools.get_diagnosis(image_path)
-            presc = prescribe(question, image_path=image_path)
-
-        # ── DL 진단 패널 (근거) ──
         st.markdown("#### 🔬 DL 진단 (근거)")
         if diag.get("ood_blocked"):
             st.warning(f"진단 차단 — {diag.get('reason')}. 병명을 단정하지 않고 재촬영을 안내합니다.")
@@ -92,7 +95,6 @@ def render():
             st.caption("클래스별 확률 · " + "  ".join(
                 f"{infer.LABEL_KR[k]} {v * 100:.0f}%" for k, v in diag["probs"].items()))
 
-        # ── LLM 처방 카드 ──
         st.markdown("#### 💬 LLM 처방")
         st.success(f"**{presc.진단요약}**")
         st.markdown(
@@ -107,6 +109,10 @@ def render():
                 st.markdown(f"- {s}")
         else:
             st.caption("ℹ️ 이 진단에 대한 재배가이드 근거를 찾지 못했어요.")
+
+        if st.button("📣 디스코드로 보내기", key="send_presc"):
+            ok, msg = notify.notify_prescription(presc)
+            (st.success if ok else st.warning)(msg)
 
     # ── 가상 센서 · 환경 예측 · 코치 · 경보 (3-3) ──
     st.divider()
@@ -166,12 +172,19 @@ def render():
                 if st.button("⚠️ 조기 경보", use_container_width=True):
                     from llm import pipeline
                     with st.spinner("경보 판단 중…"):
-                        w = pipeline.early_warning(live)
-                    box = {"경고": st.error, "주의": st.warning}.get(w.경보수준, st.info)
-                    box(f"경보수준: {w.경보수준}" + (f" · 위험병해: {w.위험병해}" if w.위험병해 and w.위험병해 != "없음" else ""))
-                    st.markdown(f"- **이유** — {w.이유}")
-                    if w.권장조치:
-                        st.markdown(f"- **권장조치** — {w.권장조치}")
+                        st.session_state["last_warning"] = pipeline.early_warning(live)
+
+            if "last_warning" in st.session_state:
+                from llm import notify
+                w = st.session_state["last_warning"]
+                box = {"경고": st.error, "주의": st.warning}.get(w.경보수준, st.info)
+                box(f"경보수준: {w.경보수준}" + (f" · 위험병해: {w.위험병해}" if w.위험병해 and w.위험병해 != "없음" else ""))
+                st.markdown(f"- **이유** — {w.이유}")
+                if w.권장조치:
+                    st.markdown(f"- **권장조치** — {w.권장조치}")
+                if st.button("📣 디스코드로 보내기", key="send_warn"):
+                    ok, msg = notify.notify_warning(w)
+                    (st.success if ok else st.warning)(msg)
 
     st.divider()
     st.caption("환각 방어 3종: ① 신뢰도 톤 분기 · ② 게이트 차단 안내 · ③ 클래스 한정성(잎 병해 3종). "
