@@ -517,9 +517,9 @@ def render_live_tab(setpoints):
         return "-" if v is None else f"{v:.1f}{unit}"
 
     metric_row([
-        ("외기 실황", _fmt(cur["out_temp"], "℃"), None),
-        ("예측 내부(제어 전)", _fmt(cur["base_temp"], "℃"), None),
-        ("예측 내부(제어 후)", _fmt(cur["ctrl_temp"], "℃"), None),
+        ("외부 온도(실황)", _fmt(cur["out_temp"], "℃"), None),
+        ("실내 온도(제어 없음)", _fmt(cur["base_temp"], "℃"), None),
+        ("실내 온도(제어)", _fmt(cur["ctrl_temp"], "℃"), None),
         ("작동 중 장치", devices_on_label, None),
     ])
     st.caption("🔮 지금 이후 값은 기상청(KMA) 예보 기반 예측이에요 — 매시 자동 갱신돼요.")
