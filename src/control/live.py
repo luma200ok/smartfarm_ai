@@ -100,8 +100,10 @@ def indoor_baseline(outdoor: "list[dict]", date=None) -> "list[dict]":
 
     일사량은 시간별 실측이 없어 주간(07~18시)=학습 데이터 doy 계절 평균
     (model["doy_solar_climatology"]), 야간=0으로 근사해 predict()에 넣는다.
-    내부 습도 기준선은 외기 습도 + INDOOR_HUMIDITY_OFFSET(온실 보습 보정, 상수)로 단순
-    근사한다 — 둘 다 정밀 물리 모델이 아니라 대시보드용 근사치임에 유의.
+    내부 습도 기준선(이슈 #37)은 모델 payload에 "습도" 타깃이 있으면 predict() 결과를
+    그대로 사용하고, 없으면(구버전 pkl) 기존 폴백 — 외기 습도 + INDOOR_HUMIDITY_OFFSET
+    (온실 보습 보정, 상수)로 단순 근사한다 — 어느 쪽이든 정밀 물리 모델이 아니라
+    대시보드용 근사치임에 유의.
     기대값 모델(pkl) 미배포 시 base_temp는 외기 온도 그대로 폴백한다.
     """
     from llm import expect as expect_mod
@@ -125,7 +127,9 @@ def indoor_baseline(outdoor: "list[dict]", date=None) -> "list[dict]":
         base_temp = exp["평균"] if exp else temp
 
         base_hum = None
-        if humidity is not None:
+        if exp and "습도" in exp:
+            base_hum = max(0.0, min(exp["습도"], 100.0))
+        elif humidity is not None:
             base_hum = min(humidity + INDOOR_HUMIDITY_OFFSET, 100.0)
 
         baseline.append({

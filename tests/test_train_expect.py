@@ -29,12 +29,14 @@ def _make_df(n_groups=6, n_per_group=40, seed=0):
             solar = 200 + 100 * np.sin(2 * np.pi * doy / 365) + rng.normal(0, 5)
             inner_mean = outer + 5 + rng.normal(0, 0.5)
             inner_min = inner_mean - 3 + rng.normal(0, 0.3)
+            inner_hum = 70 - 0.5 * outer + rng.normal(0, 2)
             rows.append({
                 "연도": year, "농가명": farm, "작기": season,
                 "품목": "방울토마토" if (farm + season) % 2 == 0 else "완숙토마토",
                 "날짜": pd.Timestamp("2021-01-01") + pd.to_timedelta(int(doy) - 1, unit="D"),
                 "온도내부_평균": inner_mean,
                 "온도내부_최저": inner_min,
+                "습도내부_평균": float(np.clip(inner_hum, 0, 100)),
                 "온도외부_평균": outer,
                 "일사량_평균": max(solar, 0),
             })
@@ -72,6 +74,7 @@ def test_doy_encoding_boundaries():
         "날짜": ["2022-01-01", "2022-12-31"],  # doy=1, doy=365
         "온도내부_평균": [20.0, 20.0],
         "온도내부_최저": [18.0, 18.0],
+        "습도내부_평균": [70.0, 70.0],
         "온도외부_평균": [10.0, 10.0],
         "일사량_평균": [100.0, 100.0],
     })

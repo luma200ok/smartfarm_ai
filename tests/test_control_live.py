@@ -71,6 +71,30 @@ def test_indoor_baseline_uses_expect_model(monkeypatch):
     assert baseline[0]["base_hum"] == pytest.approx(60.0)  # 50 + INDOOR_HUMIDITY_OFFSET(10)
 
 
+def test_indoor_baseline_uses_model_humidity_when_available(monkeypatch):
+    """이슈 #37 — 모델 payload에 "습도" 타깃이 있으면 base_hum은 predict()의 습도값을
+    그대로 쓴다(기존 외기+OFFSET 폴백 대신)."""
+    from datetime import date
+    from llm import expect as expect_mod
+
+    class _DummyHumModel:
+        def predict(self, X):
+            import numpy as np
+            return np.array([42.0])
+
+    payload = {
+        "features": ["온도외부_평균", "일사량_평균", "doy_sin", "doy_cos"],
+        "models": {"평균": _DummyHumModel(), "최저": _DummyHumModel(), "습도": _DummyHumModel()},
+        "resid_sigma": {"평균": 1.0, "최저": 1.0, "습도": 1.0},
+        "doy_solar_climatology": {},
+    }
+    monkeypatch.setattr(expect_mod, "load_model", lambda force=False: payload)
+    outdoor = [{"hour": 12, "temp": 30.0, "humidity": 50.0}]
+    baseline = live.indoor_baseline(outdoor, date=date(2026, 7, 3))
+    # 폴백(50+10=60)이 아니라 모델 예측값(42.0)이 그대로 쓰여야 함
+    assert baseline[0]["base_hum"] == pytest.approx(42.0)
+
+
 def test_indoor_baseline_falls_back_to_outdoor_temp_when_no_model(monkeypatch):
     from datetime import date
     from llm import expect as expect_mod

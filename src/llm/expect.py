@@ -70,7 +70,9 @@ def predict(model: dict, reading: dict, date=None) -> dict | None:
     """model(payload dict) + reading(온도외부_평균·일사량_평균 포함) + date → 타깃별 기대값.
 
     model이 None이면 None. reading에 필요한 피처가 없어도 None(우아한 저하).
-    반환: {"평균": float, "최저": float, "resid_sigma": {"평균": float, "최저": float}}
+    model["models"]에 있는 타깃 키를 그대로 순회해 반환하므로, 구버전 pkl(습도 타깃
+    없음)을 로드해도 "습도" 키 없이 기존 "평균"/"최저"만 반환된다(하위호환).
+    반환: {"평균": float, "최저": float, ["습도": float,] "resid_sigma": {...}}
     """
     if model is None:
         return None
