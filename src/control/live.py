@@ -30,6 +30,14 @@ CTRL_HUM_MAX = 100.0
 # 실내 습도 기준선 근사 — 외기습도 + 온실 보습 보정(상수, 실측 아닌 근사치).
 INDOOR_HUMIDITY_OFFSET = 10.0
 
+# 습도 P-제어(이슈 #33) — 장치(제습기/가습기) ON 중 시간당 델타 = clamp(HUM_P_GAIN ×
+# (hum_mid - ctrl_hum), -HUM_P_MAX_DELTA, +HUM_P_MAX_DELTA). hum_mid = 밴드 중앙
+# ((hum_low+hum_high)/2). 기본 밴드(60~85%, mid=72.5%) 기준 오차 13.3%p 이상이면 캡
+# (±8.0%p/h, 기존 EFFECTS_HOURLY 습도 값과 동일 — "최대 출력"으로 의미 재정의)에
+# 도달하는 수준으로 튜닝. 중앙에 가까워질수록 델타가 비례해 줄어 진동 없이 수렴한다.
+HUM_P_GAIN = 0.6
+HUM_P_MAX_DELTA = 8.0
+
 # 일사량 시간별 데이터가 없어 주간(07~18시)만 "낮"으로 근사(학습 데이터 doy 계절 평균 사용),
 # 야간은 0으로 둔다.
 DAYTIME_HOURS = range(7, 19)
@@ -127,6 +135,17 @@ def indoor_baseline(outdoor: "list[dict]", date=None) -> "list[dict]":
     return baseline
 
 
+def _hum_pcontrol_delta(devices_on: "list[str]", ctrl_hum: float, setpoints) -> float:
+    """습도 P-제어 델타(이슈 #33) — 제습기/가습기 ON 중에만 hum_mid를 향해 비례 이동.
+    둘 다 OFF면 0.0(장치 효과 없음). decide()가 dehumidifier/humidifier 동시 ON을
+    금지하므로 두 장치가 동시에 이 함수에 들어올 일은 없다."""
+    if "dehumidifier" not in devices_on and "humidifier" not in devices_on:
+        return 0.0
+    hum_mid = (setpoints.hum_low + setpoints.hum_high) / 2
+    raw = HUM_P_GAIN * (hum_mid - ctrl_hum)
+    return max(-HUM_P_MAX_DELTA, min(HUM_P_MAX_DELTA, raw))
+
+
 def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "list[dict]":
     """시간 순 재생 — controller.decide() 재사용, ON 장치 효과(시간 환산)를 다음 시간
     내부값에 반영해 "제어 후" 내부온·습도를 산출한다.
@@ -160,7 +179,11 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
             ctrl_hum = item["base_hum"]
 
         reading = {"온도내부_평균": ctrl_temp, "습도내부_평균": ctrl_hum}
-        logs = controller.decide(reading, setpoints, states, date=f"{date} {item['hour']:02d}:00")
+        # hum_mode="center" — P-제어(델타가 hum_mid로 비례 수렴)에 맞춰 OFF 판정도 중앙
+        # 근접 기준을 명시(리뷰 P1 픽스, 이슈 #33) — 리플레이(app/views/monitor.py)는
+        # decide() 기본값(edge, 경계 히스테리시스)을 그대로 사용.
+        logs = controller.decide(reading, setpoints, states, date=f"{date} {item['hour']:02d}:00",
+                                  hum_mode="center")
         devices_on = [d for d in states if states[d].on]
 
         timeline.append({
@@ -170,7 +193,7 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
         })
 
         delta_temp = sum(EFFECTS_HOURLY.get(d, {}).get("온도내부_평균", 0.0) for d in devices_on)
-        delta_hum = sum(EFFECTS_HOURLY.get(d, {}).get("습도내부_평균", 0.0) for d in devices_on)
+        delta_hum = _hum_pcontrol_delta(devices_on, ctrl_hum, setpoints)
 
         next_base_temp = baseline[idx + 1]["base_temp"] if idx + 1 < len(baseline) else None
         next_base_hum = baseline[idx + 1]["base_hum"] if idx + 1 < len(baseline) else None
@@ -194,12 +217,17 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
         if next_base_hum is not None:
             base_drift_hum = next_base_hum - item["base_hum"]
             candidate_hum = ctrl_hum + base_drift_hum + delta_hum
-            # 온도와 동일한 우선순위 — 물리 클램프 먼저, 관통 방지가 최종적으로 우선한다.
+            # 물리 클램프(0~100%)는 그대로 유지. 관통 방지는 P-제어 도입(이슈 #33)으로
+            # 델타 자체가 hum_mid를 향해 비례 수렴해 밴드 중앙을 크게 넘기지 않지만, 외기
+            # 급변(base_drift_hum)이 한 스텝에 더해질 수 있어 중앙(hum_mid) 기준 데드밴드
+            # 경계는 안전망으로 유지한다(기존 hum_low/high 경계 대신 hum_mid 경계로 조정 —
+            # OFF 판정 기준이 밴드 경계가 아니라 중앙 근접으로 바뀌었으므로 일치시킴).
             candidate_hum = max(CTRL_HUM_MIN, min(CTRL_HUM_MAX, candidate_hum))
-            if "dehumidifier" in devices_on:  # 제습 중 — hum_low 데드밴드 경계 아래로 관통 금지
-                candidate_hum = max(candidate_hum, setpoints.hum_low + setpoints.hum_deadband)
-            if "humidifier" in devices_on:  # 가습 중 — hum_high 데드밴드 경계 위로 관통 금지
-                candidate_hum = min(candidate_hum, setpoints.hum_high - setpoints.hum_deadband)
+            hum_mid = (setpoints.hum_low + setpoints.hum_high) / 2
+            if "dehumidifier" in devices_on:  # 제습 중 — 중앙 데드밴드 아래로 관통 금지
+                candidate_hum = max(candidate_hum, hum_mid - setpoints.hum_deadband)
+            if "humidifier" in devices_on:  # 가습 중 — 중앙 데드밴드 위로 관통 금지
+                candidate_hum = min(candidate_hum, hum_mid + setpoints.hum_deadband)
             ctrl_hum = candidate_hum
         else:
             ctrl_hum = None

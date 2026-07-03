@@ -153,6 +153,68 @@ def test_simulate_control_hum_converges_to_band_dramatic_effect():
     assert any(item["ctrl_hum"] < 85.0 for item in timeline[1:])
 
 
+# ── 습도 P-제어(이슈 #33) ─────────────────────────────────────────────────
+def test_simulate_control_hum_converges_to_mid_no_chattering():
+    """고습 시작 → 제습기 ON → ctrl_hum이 밴드 중앙(72.5%) 부근으로 수렴하고 진동 없음."""
+    baseline = _baseline({h: (22.0, 90.0) for h in range(30)})  # 외기 습도 고정(안정적 수렴 확인)
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    on_flags = ["dehumidifier" in t["devices_on"] for t in timeline]
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 2  # ON → (수렴 후) OFF, 그 이상 왔다갔다 없음(진동 방지)
+
+    last = timeline[-1]
+    hum_mid = (_sp().hum_low + _sp().hum_high) / 2
+    assert abs(last["ctrl_hum"] - hum_mid) <= _sp().hum_deadband + 1e-6
+
+
+def test_simulate_control_hum_delta_shrinks_near_mid():
+    """중앙 근접 시 델타(비례)가 감소 — 초기 큰 오차 스텝보다 중앙 근접 스텝의 변화폭이 작다."""
+    baseline = _baseline({h: (22.0, 90.0) for h in range(10)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    early_step = abs(timeline[1]["ctrl_hum"] - timeline[0]["ctrl_hum"])
+    late_step = abs(timeline[-1]["ctrl_hum"] - timeline[-2]["ctrl_hum"])
+    assert late_step < early_step
+
+
+def test_simulate_control_hum_delta_capped_at_max():
+    """오차가 클 때(캡 도달 수준) 한 스텝 변화가 HUM_P_MAX_DELTA를 넘지 않는다."""
+    baseline = _baseline({h: (22.0, 99.0) for h in range(3)})  # 오차 큼(밴드 상한보다 훨씬 위)
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    step = timeline[0]["ctrl_hum"] - timeline[1]["ctrl_hum"] if timeline[1]["ctrl_hum"] is not None else 0
+    assert step <= live.HUM_P_MAX_DELTA + 1e-9
+
+
+def test_simulate_control_hum_converges_symmetric_humidifier():
+    """저습 대칭 — 가습기 ON → ctrl_hum이 중앙(72.5%)으로 수렴."""
+    baseline = _baseline({h: (22.0, 40.0) for h in range(30)})  # 저습 고정
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    on_flags = ["humidifier" in t["devices_on"] for t in timeline]
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 2
+
+    last = timeline[-1]
+    hum_mid = (_sp().hum_low + _sp().hum_high) / 2
+    assert abs(last["ctrl_hum"] - hum_mid) <= _sp().hum_deadband + 1e-6
+
+
+def test_simulate_control_emergency_hum_still_detected_with_pcontrol():
+    """P-제어 도입으로 긴급(풀가동에도 못 잡음) 오판이 없는지 확인 — 긴급 판정 시점엔
+    밴드 밖(오차 큼)이라 델타가 캡(±8)에 있어 emergency_hours() 의미가 그대로 유지된다."""
+    baseline = _baseline({h: (22.0, 99.0) for h in range(6)})  # 밴드 상한(85%)을 훨씬 초과
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    emg = live.emergency_hours(timeline, _sp())
+    assert len(emg) > 0
+    assert all("고습 지속" in e["reason"] for e in emg)
+
+
 def test_dehumidifier_and_humidifier_never_both_on_live():
     from control import controller
     states = default_states()

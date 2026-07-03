@@ -400,7 +400,7 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
         color="crimson", strokeDash=[4, 2], strokeWidth=2
     ).encode(x="hour:Q")
 
-    return (forecast_band + lines + bounds + now_rule).properties(height=280)
+    return (forecast_band + lines + bounds + now_rule).properties(height=280).interactive()
 
 
 def _split_events(items: list, now_hour: int) -> tuple:
