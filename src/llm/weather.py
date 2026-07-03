@@ -41,7 +41,6 @@ _FAIL_TTL = 60
 
 # 재시도 대기(초) — 1차 실패 후 1.5s, 2차 실패 후 3s 백오프. time.sleep 사용, 테스트에서 monkeypatch로 무력화 가능
 _RETRY_DELAYS = [1.5, 3.0]
-_RETRY_DELAY = _RETRY_DELAYS[0]  # 하위호환(기존 테스트·문서에서 참조 가능)
 
 # stale-while-error 상한(초) — 신선 캐시가 만료돼도 이 나이 이내면 stale 데이터로 폴백(이슈 #29)
 _STALE_MAX_AGE = 6 * 3600
