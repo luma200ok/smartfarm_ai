@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-03** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-04** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -14,7 +14,7 @@
 ## 🧩 Phase 3 구성 (파일 맵)
 | 청크 | 산출물 | 요약 |
 |---|---|---|
-| 3-1 처방 | `src/llm/prescribe.py`·`tools.py` | Ollama `qwen2.5:14b` function calling(get_diagnosis·get_detection·get_forecast) + 환각방어 3종 + 구조화 JSON. 지연 개선: tool 라운드 캡·keep_alive 30m·프롬프트 다이어트·진행 콜백(이슈 #15, PR #16) |
+| 3-1 처방 | `src/llm/prescribe.py`·`tools.py` | Ollama `qwen2.5:14b` function calling(get_diagnosis·get_detection·get_forecast) + 환각방어 3종 + 구조화 JSON. 지연 개선: tool 라운드 캡·keep_alive 30m·프롬프트 다이어트·진행 콜백(이슈 #15, PR #16) → **fast-path 1-call**(`prescribe_fast`, 진단·RAG·예보 코드 직행 + writer 모델 분리, 이슈 #18, PR #19 — 서버 342.6→16.2s) |
 | 3-2 RAG | `src/llm/rag/`·`data/nongsaro/*.md` | 농사로/NCPMS 코퍼스 → bge-m3 임베딩·numpy 코사인 → 근거 출처 코드 주입 |
 | 3-3 통합 | `src/dl/infer.py`(forecast)·`src/dl/train_lstm.py`·`src/llm/pipeline.py`·`src/sim/virtual_sensor.py` | LSTM 환경예측(토마토 전용, MAE 1.11℃) + 시간축 처방 + 일일코치·조기경보 + 가상센서 재생 |
 | 3-4 알림 | `src/llm/notify.py` | 경보·처방 디스코드 Webhook 발송(수동 버튼, 앱) |
@@ -29,7 +29,7 @@
 ## 🖥 인프라 · 로컬 전제
 | 항목 | 값 |
 |---|---|
-| LLM | Ollama 로컬 `qwen2.5:14b`(처방) · `bge-m3`(RAG 임베딩) — `ollama pull` 필요, 데몬 구동 |
+| LLM | Ollama — 로컬: `qwen2.5:14b`(처방·agentic) · 서버: `qwen2.5:7b`(agentic) + `exaone3.5:2.4b`(처방 fast-path writer, `OLLAMA_WRITER_MODEL`) · 공통: `bge-m3`(RAG 임베딩). `ollama pull` 필요, 데몬 구동 |
 | 알림 | 디스코드 Webhook — `.env`의 `DISCORD_WEBHOOK_URL`(gitignore, 현재 쉘 env에 설정됨) |
 | 데이터(로컬) | `data/processed/env_daily.csv`(LSTM·센서, gitignore) · `data/tomato/*`(진단) · `data/nongsaro/*.md`(RAG, 커밋됨) |
 | 모델(로컬) | `models/*.pt`(gitignore) — `tomato_resnet18/mobilenet_v2/part/yolov8n`, `env_lstm.pt`(+meta json 커밋). `phase1_crop_env_clf.pkl` |
@@ -51,7 +51,8 @@
 - [x] **관제 오늘 운영 모드**(이슈 #23 클로즈): KMA 기반 오늘 내부환경 예측→장치 제어 온도 조정 + 매시 상주 디스코드 알림(smartfarm-control.timer 서버 설치·실발송 검증) — 리플레이는 시뮬레이션 탭으로 (PR #24)
 - [x] **설정 밴드 파일 영속화**(이슈 #21 클로즈): 새로고침·재접속 초기화 → `data/control_setpoints.json` 원자적 저장+폴백+변경 필드 병합, 서버 실검증(새 세션 유지) 완료 (PR #22)
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
-- [ ] **문서 보강(예정)**: README·figures의 stale 이미지 교체(관제 개편 후 화면 기준) + 환경 관제 섹션 서술 보강(온도=서모스탯/습도=P-제어 전략 분리 등)
+- [ ] **습도 P-제어 전환**(이슈 #33, 진행 중): 습도를 밴드 중앙 목표 P-제어로(온도는 서모스탯 유지) + 추이 차트 interactive 줌
+- [ ] **문서 보강(예정)**: README·figures의 stale 이미지 교체(관제 개편 후 화면 기준) + 환경 관제 섹션 서술 보강(온도=서모스탯/습도=P-제어 전략 분리 등) + 노션 LLM·대문에 관제 반영
 - [ ] 예보 경로 stale 캡션 노출(PR #30 리뷰 P3 이월 — today_outdoor가 stale 플래그 미소비)
 - [ ] 진단 병해 클래스 확장 2차: 흰가루·잿빛(데이터 수집 필요).
 - [ ] 실센서/스프링 서버 sensor API를 `monitor.py`·가상센서 소스로 어댑터 연결

@@ -58,7 +58,7 @@
 - 데이터 양 효과(작물별 recall): 방울토마토 +0.24 · 오이 +0.18 · 가지 +0.14, 수박은 단년엔 불가 → 다년 신규 커버
 - 한계: 환경은 농가가 **제어하는 값**이라 작물 고유 신호가 약함 → 새 농가 일반화(0.49)는 본질적 난제
 
-🚀 [통합 앱 → **Phase 1 · ML** 탭](https://smartfarm-ai.luma200ok.com) · 📄 [수행내역서](docs/phase1_ml.md) · 🔧 [트러블슈팅(ML)](docs/troubleshooting/troubleshooting.md#ml)
+🚀 [통합 앱 → «작물 환경 추천»·«ML 실험 기록»](https://smartfarm-ai.luma200ok.com/crops) · 📄 [수행내역서](docs/phase1_ml.md) · 🔧 [트러블슈팅(ML)](docs/troubleshooting/troubleshooting.md#ml)
 
 </details>
 
@@ -83,7 +83,7 @@
 - **평가 심화:** 3×3 혼동행렬(병종 혼동 적음) · **FN 6건** · 불균형 가중치(질병 recall 0.86/0.93 → 0.96/0.98)
 - **검출:** YOLOv8n 3클래스 전이학습(mAP@50 0.78) · **시계열:** 단년 1.22 → 다년 1.18℃(데이터 양 효과 재현)
 
-🚀 [통합 앱 → **Phase 2 · DL** 탭](https://smartfarm-ai.luma200ok.com) · 📄 [수행내역서](docs/phase2_dl.md) · 🔧 [트러블슈팅(DL)](docs/troubleshooting/troubleshooting.md#dl)
+🚀 [통합 앱 → «잎 병해 진단»·«DL 실험 기록»](https://smartfarm-ai.luma200ok.com/diagnosis) · 📄 [수행내역서](docs/phase2_dl.md) · 🔧 [트러블슈팅(DL)](docs/troubleshooting/troubleshooting.md#dl)
 
 </details>
 

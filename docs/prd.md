@@ -2,7 +2,8 @@
 
 > **한 줄 컨셉:** 센서는 *환경 숫자*를 보여주지만, 내 AI는 *지금 작물에 뭘 해줘야 하는지*를 알려준다.
 >
-> 작성일: 2026-06-18 · 갱신: 2026-06-30 · 상태: **Phase 1·2 완료 / Phase 3 착수 전** · 학습 프로젝트 (ML → DL → LLM)
+> 작성일: 2026-06-18 · 갱신: 2026-07-04 · 상태: **Phase 1·2·3 완료** · 학습 프로젝트 (ML → DL → LLM)
+> 이 문서는 **기획 시점 스냅샷**(계획 기록) — 실제 구현 현황은 [STATUS.md](STATUS.md)·[roadmap.md](roadmap.md)·[phase3_llm.md](phase3_llm.md) 참조.
 > 위치: `toy_project/solo/smartfarm_ai` · 참조: `toy_project/solo/weather_ml`
 > ⚠️ 기획 초안(06-18)을 실제 구현 기준으로 갱신함 — 데이터(AI Hub 071)·진단 클래스(잎곰팡이병·황화잎말이)·실데이터 LSTM·YOLO 검출·2단 게이트·MLflow 반영.
 
@@ -182,7 +183,7 @@
 - [x] **알림 수단: 디스코드 Webhook** (Phase3 · 변경: 텔레그램→디스코드 — 기존 자바 smartfarm 프로젝트 웹훅 재사용, 대화형 필요 시 새 봇)
 - [x] **시계열 데이터: 농진청 실데이터로 확정** — 가상 시뮬레이션 불필요(실데이터로 LSTM 학습 완료, MAE 1.18℃)
 - [x] **비전 데이터: AI Hub 071 시설작물 질병진단** — PlantVillage·153 대신 071 토마토로 확정·구현
-  > Phase 1·2 결정은 모두 구현 완료. Phase 3(LLM/RAG/알림)는 착수 시 재확인.
+  > Phase 1·2·3 결정 모두 구현 완료(Phase 3 = Ollama 로컬 LLM·RAG bge-m3·디스코드 알림 — 상세 [phase3_llm.md](phase3_llm.md)).
 
 ---
 
@@ -198,6 +199,7 @@
 ### 톱니 ↔ 개별 배포 (둘 다 됨)
 - **공유(물림):** `data/` · `models/`(dl 저장→llm 로드) · `src/common/`
 - **분리(개별 배포):** `app/phase1_ml.py · phase2_dl.py · phase3_llm.py` → **Streamlit Cloud 앱 3개로 따로 배포** → 라이브 URL 3개
+  > *(계획 당시안 — 실제 구현은 단일 통합 멀티페이지 앱 `app/streamlit_app.py`+`app/views/`로 수렴, OCI 서버 1곳 배포: https://smartfarm-ai.luma200ok.com)*
 - 과제의 "**3개 배포 완성**" 요구를 모노레포에서 그대로 충족.
 
 ### 포트폴리오 노출 (dopacheck 방식)

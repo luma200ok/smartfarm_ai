@@ -145,14 +145,15 @@
 ## 7. 산출물 및 실행 방법
 
 ### 7.1 Streamlit 데모
-환경값 슬라이더 입력 → XGBoost 작물 예측 + 신뢰도 Top3 + 환경 비교표를 4탭으로 제공.
+환경값 슬라이더 입력 → XGBoost 작물 예측 + 신뢰도 Top3 + 환경 비교표 제공.
+> *(당시 개별 데모 `app/phase1_ml.py` 기준 — 현재는 통합 앱으로 흡수: «작물 환경 추천» + [프로젝트 기록] «ML 실험 기록» 페이지)*
 
 ```bash
-# 프로젝트 루트에서 실행
-streamlit run app/phase1_ml.py
+# 프로젝트 루트에서 실행 (통합 앱)
+streamlit run app/streamlit_app.py
 ```
 
-- 코드: [`app/phase1_ml.py`](../app/phase1_ml.py)
+- 코드: [`app/views/crops.py`](../app/views/crops.py) · [`app/views/ml_eval.py`](../app/views/ml_eval.py)
 - 🔗 라이브 데모: https://smartfarm-ai.luma200ok.com (OCI 자체 서버 배포 — Caddy+systemd)
 
 ### 7.2 파이프라인 재현 노트북

@@ -11,7 +11,7 @@
 | 프레임워크 | **PyTorch (Apple MPS 가속)** · 검출 `ultralytics` YOLOv8 |
 | 베스트 모델 | 분류 백본 비교(MLflow) **mobilenet_v2 0.987 · resnet18 0.971** → 서빙 **ResNet18**(Grad-CAM 호환·평가 acc 0.97) / 검출 **YOLOv8n (mAP@50 0.78)** |
 | 핵심 차별화 | **Grad-CAM** 판단 근거 설명 + **YOLO** 위치 검출 + **다변량 LSTM**(baseline 초과) |
-| 코드 | `src/dl/` (STEP 1~5) · 🚀 데모 `app/phase2_dl.py` (진단+Grad-CAM · YOLO 검출 2탭) |
+| 코드 | `src/dl/` (STEP 1~5) · 🚀 데모 «잎 병해 진단» 페이지(`app/views/diagnosis.py` — 진단+Grad-CAM · YOLO 검출 2탭, 당시엔 `app/phase2_dl.py`) |
 
 ---
 
@@ -38,7 +38,7 @@
 | **1 · 기초** | `src/dl/01_basics.py` | 뉴런·활성화·역전파·DataLoader를 **손계산 대조**로 원리 증명 |
 | **2 · 핵심** | `src/dl/02_core.py` | CNN 기초 → 전이학습(백본 비교) → Grad-CAM → LSTM |
 | **3 · 평가** | `src/dl/03_eval.py` | 불균형 대응(클래스 가중치) → 혼동행렬·ROC/AUC·FN 분석 |
-| **4 · 데모** | `src/dl/04_demo.py` · `app/phase2_dl.py` | `.pt` 저장 → 추론 파이프라인 → Streamlit |
+| **4 · 데모** | `src/dl/04_demo.py` · `app/views/diagnosis.py`(구 `app/phase2_dl.py`) | `.pt` 저장 → 추론 파이프라인 → Streamlit |
 | **5 · 검출(고급)** | `src/dl/05_detect.py` | YOLO 병해 잎 위치 검출 — 비전 파트의 마지막 두께 |
 
 > `2-N` = 불변 청크 ID(묶음 = STEP). 상세 청크 기록은 `_local/concepts/DL_devlog.md`, 이론은 `DL.md`.
@@ -182,12 +182,14 @@ python src/dl/04_demo.py --chunk 2-10   # 저장 모델로 1장 추론 시연
 - **탭1 진단:** 잎 사진 업로드 → 정상·잎곰팡이·황화잎말이 진단 + **Grad-CAM 히트맵**.
 - **탭2 검출:** YOLO로 잎 위치 박스 + 병종 라벨 + 신뢰도(conf 슬라이더).
 
+> *(당시 개별 데모 `app/phase2_dl.py` 기준 — 현재는 통합 앱의 «잎 병해 진단» 페이지로 흡수)*
+
 ```bash
-streamlit run app/phase2_dl.py
+streamlit run app/streamlit_app.py
 ```
 
-- 코드: [`app/phase2_dl.py`](../app/phase2_dl.py)
-- 🔗 라이브 데모: **https://smartfarm-ai.luma200ok.com** (OCI 배포 · 진단+Grad-CAM·YOLO 검출 탭)
+- 코드: [`app/views/diagnosis.py`](../app/views/diagnosis.py)
+- 🔗 라이브 데모: **https://smartfarm-ai.luma200ok.com/diagnosis** (OCI 배포 · 진단+Grad-CAM·YOLO 검출 탭)
 
 ### 7.3 단계별 재현
 ```bash
