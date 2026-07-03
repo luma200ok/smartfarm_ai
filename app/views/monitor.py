@@ -374,14 +374,9 @@ def render_discord_settings():
 
 _TREND_PALETTE = ["#1f77b4", "#7f7f7f", "#d62728", "#2ca02c", "#9467bd"]
 
-
-def _lighten(hex_color: str, ratio: float = 0.55) -> str:
-    """계획(예측) 세그먼트용 밝은 톤 — 실행과 같은 계열이되 옅게(흰색 쪽 혼합).
-
-    실행/계획이 같은 색이면 점선만으로 구분이 어렵다는 사용자 피드백 반영(strokeDash + 명도)."""
-    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
-    mix = lambda c: int(c + (255 - c) * ratio)
-    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+# 실행/계획 세그먼트 색(사용자 확정): 실행=빨강(눈에 띄게), 계획(미실행·예보)=회색.
+_EXEC_COLOR = "#d62728"
+_PLANNED_COLOR = "#9e9e9e"
 
 
 def _split_control_segments(long_df, value_cols: list, split_col: "str | None", now_hour: int):
@@ -391,7 +386,8 @@ def _split_control_segments(long_df, value_cols: list, split_col: "str | None", 
     split_col이 value_cols에 있으면 해당 계열을 now_hour 기준 두 세그먼트로 나눈다 —
     "{split_col}(실행)"은 hour<=now_hour, "{split_col}(계획)"은 hour>=now_hour(now
     포인트를 양쪽이 공유해 선이 끊기지 않고 이어짐). color_domain/color_range는 같은
-    길이로 반환하며, 분리된 두 계열은 원래 색(base_color)을 그대로 공유한다(strokeDash로만
+    길이로 반환하며, 분리된 두 계열은 실행=_EXEC_COLOR(빨강)·계획=_PLANNED_COLOR(회색)로
+    명확히 구분한다(사용자 확정 — strokeDash에 더해 색으로도
     구분 — 범례 색은 유지, 선 종류만 실행/계획으로 나뉨).
 
     반환: (long_df, color_domain, color_range) — split_col 미해당이면 원본 그대로."""
@@ -401,7 +397,6 @@ def _split_control_segments(long_df, value_cols: list, split_col: "str | None", 
     if not split_col or split_col not in value_cols:
         return long_df, color_domain, color_range
 
-    base_color = color_range[value_cols.index(split_col)]
     exec_name, planned_name = f"{split_col}(실행)", f"{split_col}(계획)"
     mask = long_df["구분"] == split_col
     exec_df = long_df[~mask | (long_df["hour"] <= now_hour)].copy()
@@ -413,7 +408,7 @@ def _split_control_segments(long_df, value_cols: list, split_col: "str | None", 
     long_df = pd.concat([exec_df, planned_df], ignore_index=True)
     color_domain = [c for c in value_cols if c != split_col] + [exec_name, planned_name]
     color_range = [c for c, orig in zip(color_range, value_cols) if orig != split_col] + \
-        [base_color, _lighten(base_color)]
+        [_EXEC_COLOR, _PLANNED_COLOR]
     return long_df, color_domain, color_range
 
 

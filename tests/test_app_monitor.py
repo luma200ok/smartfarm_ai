@@ -178,7 +178,7 @@ def test_split_control_segments_boundary_now_hour_zero_and_last():
 
 def test_split_control_segments_color_domain_range_length_matches():
     """범례 domain/range 길이가 항상 일치하고, split_col은 실행/계획 두 항목으로 대체되며
-    실행=base_color, 계획=밝은 톤(_lighten) — 같은 계열이되 명도로 구분된다."""
+    실행=_EXEC_COLOR(빨강), 계획=_PLANNED_COLOR(회색) — 색으로 명확히 구분된다."""
     monitor_mod = _import_monitor_module()
     value_cols = ["외기", "제어 전(기준선)", "제어 후"]
     long_df = _long_df({h: {c: 20.0 for c in value_cols} for h in range(3)}, value_cols)
@@ -190,8 +190,8 @@ def test_split_control_segments_color_domain_range_length_matches():
     assert "제어 후" not in domain
     idx_exec = domain.index("제어 후(실행)")
     idx_planned = domain.index("제어 후(계획)")
-    assert color_range[idx_exec] != color_range[idx_planned]  # 계획은 밝은 톤(구분 가능)
-    assert color_range[idx_planned] == monitor_mod._lighten(color_range[idx_exec])
+    assert color_range[idx_exec] == monitor_mod._EXEC_COLOR    # 실행=빨강
+    assert color_range[idx_planned] == monitor_mod._PLANNED_COLOR  # 계획=회색
     assert set(out_df["구분"].unique()) == {"외기", "제어 전(기준선)", "제어 후(실행)", "제어 후(계획)"}
 
 
