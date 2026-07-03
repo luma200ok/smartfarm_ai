@@ -21,7 +21,8 @@ if str(ROOT / "src") not in sys.path:
 
 from state import (K_CONTROL_ACTIVE, K_CONTROL_LAST_DATE, K_CONTROL_LOG,
                     K_CONTROL_YEAR, K_DEVICE_STATES, K_DISCORD_CONTROL_TOGGLE,
-                    K_RECENT_READINGS, K_SETPOINTS, get_vsensor)
+                    K_LIVE_DEVICE_STATES, K_RECENT_READINGS, K_SETPOINTS,
+                    get_vsensor)
 from ui import alert_box, metric_row, page_header, section, unavailable
 
 _MAX_RECENT = 10       # emergency() 판정에 필요한 3틱보다 여유 있게 보관
@@ -247,6 +248,43 @@ def render_devices(states, setpoints, r, date):
                         reason="수동 조작", mode="manual"))
 
 
+def _get_live_device_states():
+    """오늘 운영 탭 전용 장치 상태(이슈 #25) — 시뮬용 K_DEVICE_STATES와 분리 보관.
+
+    자정이 지나 날짜가 바뀌면 새로 초기화(전날 수동 오버라이드가 새 하루로 넘어가지 않도록)."""
+    from control.actuators import default_states
+
+    today = _date.today()
+    if (K_LIVE_DEVICE_STATES not in st.session_state
+            or st.session_state.get("_live_device_states_date") != today):
+        st.session_state[K_LIVE_DEVICE_STATES] = default_states()
+        st.session_state["_live_device_states_date"] = today
+    return st.session_state[K_LIVE_DEVICE_STATES]
+
+
+def render_live_devices(states, devices_on):
+    """오늘 운영 탭 장치 카드 — 자동/수동 토글·수동 ON/OFF가 오늘 운영 판정(simulate_control)에
+    반영된다(이슈 #25). ON/OFF 뱃지는 현재 시각 타임라인 항목의 devices_on 기준으로 표시."""
+    from control.actuators import DEVICE_LABEL_KR, DEVICES
+
+    section("🔌 장치", "자동 모드는 설정 밴드에 따라 자동으로 켜지고 꺼져요. "
+            "수동으로 전환하면 오늘 운영 판정에도 그대로 반영돼요.")
+    cols = st.columns(4)
+    for col, device in zip(cols, DEVICES):
+        state = states[device]
+        with col:
+            st.markdown(f"**{DEVICE_LABEL_KR[device]}**")
+            status_badge = "🟢 ON" if device in devices_on else "⚪ OFF"
+            st.caption(status_badge + (" · 자동" if state.auto else " · 수동"))
+            new_auto = st.toggle("자동 모드", value=state.auto, key=f"live_auto_{device}")
+            if new_auto != state.auto:
+                state.auto = new_auto
+            if not state.auto:
+                if st.button(("끄기" if state.on else "켜기"), key=f"live_manual_{device}",
+                              use_container_width=True):
+                    state.on = not state.on
+
+
 def render_trend(vs, live, setpoints):
     """최근 WINDOW일 추이(live 창, read-time overlay 반영) + 밴드 상/하한 오버레이."""
     from dl import infer
@@ -301,7 +339,7 @@ def render_emergency_feed():
 def render_forecast_row(r, date):
     from llm import expect as expect_mod
 
-    section("🎯 오늘 예측 vs 실측")
+    section("🎯 기대값 vs 실측")
     exp = expect_mod.expected(r, date)
     if exp is None:
         unavailable("오늘 예측", "기대값 모델(models/env_expect_reg.pkl) 없음")
@@ -333,12 +371,47 @@ def render_discord_settings():
         value=st.session_state.get(K_DISCORD_CONTROL_TOGGLE, False))
 
 
+def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now_hour: int):
+    """오늘 0~24시 추이 차트(이슈 #25 사용자 추가 요청) — 라인 + 밴드 상/하한 점선 +
+    "지금" 세로선 + 지금 이후(예보 구간) 음영으로 실측/예보 구간을 시각적으로 구분한다."""
+    import altair as alt
+    import pandas as pd
+
+    df = pd.DataFrame(rows)
+    max_hour = float(df["hour"].max()) if not df.empty else 24.0
+
+    forecast_band = alt.Chart(pd.DataFrame({"start": [now_hour], "end": [max_hour + 1]})).mark_rect(
+        opacity=0.10, color="#888888"
+    ).encode(x=alt.X("start:Q", scale=alt.Scale(domain=[0, max_hour])), x2="end:Q")
+
+    long_df = df.melt(id_vars=["hour"], value_vars=value_cols, var_name="구분", value_name="값")
+    lines = alt.Chart(long_df).mark_line(point=True).encode(
+        x=alt.X("hour:Q", title="시간(시)", scale=alt.Scale(domain=[0, max_hour])),
+        y=alt.Y("값:Q", title=None),
+        color=alt.Color("구분:N", title=None),
+    )
+
+    bounds = alt.Chart(pd.DataFrame({"y": [low, high]})).mark_rule(
+        strokeDash=[2, 2], color="gray"
+    ).encode(y="y:Q")
+
+    now_rule = alt.Chart(pd.DataFrame({"hour": [now_hour]})).mark_rule(
+        color="crimson", strokeDash=[4, 2], strokeWidth=2
+    ).encode(x="hour:Q")
+
+    return (forecast_band + lines + bounds + now_rule).properties(height=280)
+
+
 def render_live_tab(setpoints):
-    """오늘(실제 날짜) 운영 탭(이슈 #23) — KMA 외기+기대값 모델로 오늘 시간대별
-    제어 전/후 내부 온·습도 시뮬레이션(src/control/live.py, 규칙 기반). KMA
-    unavailable이면 안내 후 🧪 시뮬레이션 탭으로 유도."""
+    """오늘(실제 날짜) 운영 탭(이슈 #23, 레이아웃 재배치 이슈 #25) — KMA 외기+기대값
+    모델로 오늘 시간대별 제어 전/후 내부 온·습도 시뮬레이션(src/control/live.py, 규칙
+    기반). KMA unavailable이면 안내 후 🧪 시뮬레이션 탭으로 유도.
+
+    장치 카드의 자동/수동 토글·수동 ON/OFF는 세션 전용 K_LIVE_DEVICE_STATES에 반영되어
+    simulate_control()에 그대로 전달된다 — 단, 이는 앱 세션 한정이며 run_notify()(서버
+    타이머 경로)는 세션을 모르므로 항상 default_states()(전체 자동)로 판정한다."""
     from control import live as live_mod
-    from control.actuators import DEVICE_LABEL_KR, default_states
+    from control.actuators import DEVICE_LABEL_KR
 
     outdoor = live_mod.today_outdoor()
     if outdoor is None:
@@ -347,7 +420,7 @@ def render_live_tab(setpoints):
         return
 
     today = _date.today()
-    states = default_states()
+    states = _get_live_device_states()
     baseline = live_mod.indoor_baseline(outdoor, date=today)
     timeline = live_mod.simulate_control(baseline, setpoints, states, date=today)
     emg = live_mod.emergency_hours(timeline, setpoints)
@@ -369,15 +442,26 @@ def render_live_tab(setpoints):
         ("예측 내부(제어 후)", _fmt(cur["ctrl_temp"], "℃"), None),
         ("작동 중 장치", devices_on_label, None),
     ])
+    st.caption("🔮 지금 이후 값은 기상청(KMA) 예보 기반 예측이에요 — 매시 자동 갱신돼요.")
+
+    render_setpoints(setpoints)
+    render_live_devices(states, cur["devices_on"])
 
     section("📈 오늘 0~24시 추이", "외기·제어 전 기준선·제어 후 내부값 — 밴드를 벗어나면 장치가 자동으로 대응해요.")
-    import pandas as pd
-    rows = [{"시간": f"{t['hour']:02d}시", "외기": t["out_temp"], "제어 전(기준선)": t["base_temp"],
-             "제어 후": t["ctrl_temp"]} for t in timeline]
-    df = pd.DataFrame(rows).set_index("시간")
-    df["온도상한"] = setpoints.temp_high
-    df["온도하한"] = setpoints.temp_low
-    st.line_chart(df[["외기", "제어 전(기준선)", "제어 후", "온도상한", "온도하한"]])
+    rows = [{"hour": t["hour"], "외기": t["out_temp"], "제어 전(기준선)": t["base_temp"],
+             "제어 후": t["ctrl_temp"],
+             "제어 전 습도(기준선)": t["base_hum"], "제어 후 습도": t["ctrl_hum"]} for t in timeline]
+    temp_col, hum_col = st.columns(2)
+    with temp_col:
+        st.altair_chart(_live_trend_chart(
+            rows, ["외기", "제어 전(기준선)", "제어 후"],
+            setpoints.temp_low, setpoints.temp_high, now_hour), use_container_width=True)
+        st.caption("점선=지금 · 음영=지금 이후(기상청 예보 기반 예측)")
+    with hum_col:
+        st.altair_chart(_live_trend_chart(
+            rows, ["제어 전 습도(기준선)", "제어 후 습도"],
+            setpoints.hum_low, setpoints.hum_high, now_hour), use_container_width=True)
+        st.caption("점선=지금 · 음영=지금 이후(기상청 예보 기반 예측)")
 
     section("🧾 오늘 제어 이벤트")
     events = [{"시간": f"{t['hour']:02d}시", "장치": DEVICE_LABEL_KR.get(log.device, log.device),
@@ -392,6 +476,8 @@ def render_live_tab(setpoints):
         section("🚨 긴급/이상")
         for item in emg:
             alert_box("경고", f"{item['hour']:02d}시 — {item['reason']}")
+
+    render_discord_settings()
 
 
 def render():
@@ -412,17 +498,10 @@ def render():
 
             render_forecast_row(r, vs.date())
             st.divider()
-            render_devices(states, setpoints, r, vs.date())
-            st.divider()
             render_trend(vs, live, setpoints)
             st.divider()
             render_control_log()
             render_emergency_feed()
-
-    st.divider()
-    render_setpoints(setpoints)
-    st.divider()
-    render_discord_settings()
 
     st.divider()
     st.caption("규칙 기반 자동 제어(LLM 미사용) — 히스테리시스 데드밴드로 채터링을 방지해요.")
