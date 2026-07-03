@@ -15,8 +15,8 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from state import (K_CONTROL_ACTIVE, K_CONTROL_LAST_DATE, K_CONTROL_LOG,
-                    K_DEVICE_STATES, K_DISCORD_CONTROL_TOGGLE, K_RECENT_READINGS,
-                    K_SETPOINTS, get_vsensor)
+                    K_CONTROL_YEAR, K_DEVICE_STATES, K_DISCORD_CONTROL_TOGGLE,
+                    K_RECENT_READINGS, K_SETPOINTS, get_vsensor)
 from ui import alert_box, metric_row, page_header, section, unavailable
 
 _MAX_RECENT = 10       # emergency() 판정에 필요한 3틱보다 여유 있게 보관
@@ -56,9 +56,17 @@ def render_sensor_controls():
     scenario = st.selectbox("🧪 시뮬 시나리오", SCENARIOS,
                              key=scen_key,
                              help="한파=외기·내부 모두 급락(외기 요인) · 히터고장=외기는 그대로인데 내부만 급락(설비 고장 의심)")
-    if st.session_state.get(f"{scen_key}_applied") != scenario:
-        apply_scenario(vs, scenario)
-        st.session_state[f"{scen_key}_applied"] = scenario
+
+    def _ensure_scenario():
+        """시나리오 선택이 실제로 바뀐 경우에만 재적용(이슈 #17 P1-1/P3).
+
+        apply_scenario()는 "scenario" 태그 주입만 clear하므로 제어효과("control" 태그)엔
+        영향 없지만, 매 rerun/틱마다 불필요하게 재호출하지 않도록 변경 시에만 실행한다."""
+        if st.session_state.get(f"{scen_key}_applied") != st.session_state[scen_key]:
+            apply_scenario(vs, st.session_state[scen_key])
+            st.session_state[f"{scen_key}_applied"] = st.session_state[scen_key]
+
+    _ensure_scenario()
 
     # 슬라이더 key는 연도별로 분리 — 연도 바뀌면 새 vs.date()로 자연 초기화됨
     date_key = f"vsensor_date_{year}"
@@ -68,13 +76,13 @@ def render_sensor_controls():
     def _on_seek_change():
         """슬라이더 이동 → 커서 seek (버튼과 동일한 vs 인스턴스 공유)."""
         vs.seek(st.session_state[date_key])
-        apply_scenario(vs, st.session_state[scen_key])   # 이동해도 같은 시나리오 유지
+        _ensure_scenario()
 
     with bcol:
         st.write("")
         if st.button("다음 날 ▶", use_container_width=True):
             vs.tick()
-            apply_scenario(vs, scenario)
+            _ensure_scenario()
             st.session_state[date_key] = vs.date()   # 슬라이더 위젯 상태도 함께 갱신
 
     st.select_slider(
@@ -101,10 +109,22 @@ def _get_setpoints():
     return st.session_state[K_SETPOINTS]
 
 
-def _get_device_states():
+def _reset_control_state_for_year(year):
+    """연도(작기) 변경 시 제어 상태 리셋(이슈 #17 P2-1) — 다른 작기의 실측이 emergency()의
+    "3틱 연속" 판정에 섞여 들지 않도록 장치 상태·로그·긴급 dedup·최근 판독값을 초기화한다.
+    설정 밴드(K_SETPOINTS)는 온실 설비 설정이라 연도와 무관 — 유지."""
     from control.actuators import default_states
-    if K_DEVICE_STATES not in st.session_state:
-        st.session_state[K_DEVICE_STATES] = default_states()
+    st.session_state[K_DEVICE_STATES] = default_states()
+    st.session_state[K_CONTROL_LOG] = []
+    st.session_state[K_CONTROL_ACTIVE] = set()
+    st.session_state[K_RECENT_READINGS] = []
+    st.session_state[K_CONTROL_LAST_DATE] = None
+    st.session_state[K_CONTROL_YEAR] = year
+
+
+def _get_device_states(year):
+    if st.session_state.get(K_CONTROL_YEAR) != year:
+        _reset_control_state_for_year(year)
     return st.session_state[K_DEVICE_STATES]
 
 
@@ -158,9 +178,11 @@ def _run_control_step(vs, r, setpoints, states):
     if len(recent) > _MAX_RECENT:
         del recent[: len(recent) - _MAX_RECENT]
 
-    alert = controller.emergency(recent, setpoints, states, active)
-    if alert is not None:
-        active.add(controller.akey(alert))
+    # 자기 정리(self-cleaning) dedup — active를 매 틱 "현재 만족 키셋"으로 교체해야
+    # 조건 해소 후 재발 시 재발송된다(이슈 #17 P1-2, src/llm/monitor.evaluate와 동일 패턴).
+    to_send, keys = controller.emergency(recent, setpoints, states, active)
+    st.session_state[K_CONTROL_ACTIVE] = keys
+    for alert in to_send:
         ok, msg = notify.send_discord(_emergency_embed(alert, vs.date()))
         log_list.append({"date": vs.date(), "device": "-", "action": "긴급",
                           "reason": alert["reason"], "mode": "system"})
@@ -301,7 +323,7 @@ def render():
         return
 
     setpoints = _get_setpoints()
-    states = _get_device_states()
+    states = _get_device_states(vs.year)
     _run_control_step(vs, r, setpoints, states)
 
     render_forecast_row(r, vs.date())

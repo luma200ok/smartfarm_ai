@@ -10,9 +10,12 @@ EFFECTS: dict[str, dict[str, float]] = {
 
 
 def apply_effects(vs, states: dict, start, days: int = 1) -> None:
-    """ON 상태인 장치들의 효과를 vs.inject()로 반영(다음 days일치, read-time overlay)."""
+    """ON 상태인 장치들의 효과를 vs.inject()로 반영(다음 days일치, read-time overlay).
+
+    tag="control"로 주입 — apply_scenario()의 "scenario" 태그 clear에 영향받지 않는다
+    (이슈 #17 P1-1: 시나리오 재적용이 제어 효과까지 지우는 문제 방지)."""
     for device, state in states.items():
         if not state.on:
             continue
         for feature, delta in EFFECTS.get(device, {}).items():
-            vs.inject(feature, start, days, delta)
+            vs.inject(feature, start, days, delta, tag="control")
