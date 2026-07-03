@@ -215,7 +215,7 @@ def render_weather_qa():
                                placeholder="내일 밤 기온 괜찮을까?", key="weather_qa_input")
     if st.button("날씨 질문", key="weather_qa_btn"):
         from llm import pipeline as llm_pipeline
-        with st.spinner("날씨 확인 중"):
+        with st.spinner("날씨 확인 중 (모델·환경에 따라 수십 초 걸려요)"):
             st.session_state[K_WEATHER_QA_ANSWER] = llm_pipeline.weather_qa(weather_q or "오늘 날씨 어때?")
     if K_WEATHER_QA_ANSWER in st.session_state:
         st.markdown(st.session_state[K_WEATHER_QA_ANSWER])
@@ -233,7 +233,7 @@ def render_coach(live):
     with cc1:
         if st.button("🌅 오늘의 코치", use_container_width=True):
             from llm import pipeline
-            with st.spinner("코칭 생성 중"):
+            with st.spinner("코칭 생성 중 (모델·환경에 따라 수십 초 걸려요)"):
                 coach = pipeline.daily_coach(live)
             st.success(coach.요약)
             for todo in coach.오늘_할일:
@@ -242,7 +242,7 @@ def render_coach(live):
     with cc2:
         if st.button("⚠️ 조기 경보", use_container_width=True):
             from llm import pipeline
-            with st.spinner("경보 판단 중"):
+            with st.spinner("경보 판단 중 (모델·환경에 따라 수십 초 걸려요)"):
                 st.session_state[K_LAST_WARNING] = pipeline.early_warning(live)
 
     if K_LAST_WARNING in st.session_state:

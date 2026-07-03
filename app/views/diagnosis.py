@@ -183,8 +183,8 @@ def render():
                      "2) `python src/dl/02_core.py --chunk 2-5`")
         else:
             model = load_model()
-            st.caption("ℹ️ 이 모델은 **토마토 잎 사진 전용**입니다. "
-                       "업로드하면 먼저 **잎/비잎을 판별**해, 잎이 아닌 이미지는 진단하지 않습니다.")
+            st.caption("이 모델은 토마토 잎 사진 전용이에요. "
+                       "업로드하면 먼저 잎/비잎을 판별해, 잎이 아닌 이미지는 진단하지 않아요.")
             up = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="diag")
 
             # 예시 사진은 결과 아래에 렌더(클릭 시 rerun → 위쪽 결과가 갱신됨)
@@ -208,8 +208,8 @@ def render():
                     pcol, _ = st.columns([1, 2])
                     pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
                     st.error(
-                        f"🚫 **토마토 잎으로 보이지 않습니다**(잎·식물 신호 {score:.1%}). 진단을 진행하지 않습니다.\n\n"
-                        "이 진단기는 토마토 잎 전용입니다. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
+                        f"토마토 잎으로 보이지 않아요(잎·식물 신호 {score:.1%}). 진단을 진행하지 않아요.\n\n"
+                        "이 진단기는 토마토 잎 전용이에요. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
                     )
                 elif (part := predict_part(pil))[0] != "leaf":
                     # 식물이지만 잎이 아닌 부위(과실·꽃·줄기) → 잎 진단 차단(과육 오분류 방지)
@@ -230,15 +230,15 @@ def render():
                     gcol.image(overlay(img, cam), caption="Grad-CAM — 판단 근거(붉을수록 주목한 영역)",
                                use_container_width=True)
                     if label != "normal":
-                        st.warning(f"{LABEL_KR[label]}이(가) 의심됩니다. 위 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
+                        st.warning(f"{LABEL_KR[label]}이(가) 의심돼요. 위 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
                     else:
-                        st.success("정상으로 판단됩니다.")
+                        st.success("정상으로 판단돼요.")
 
                     st.markdown("**클래스별 확률**")
                     st.bar_chart({c: float(p) for c, p in zip([LABEL_KR[c] for c in CLASSES], probs)})
-                    st.caption("⚠️ Grad-CAM은 보조 지표 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요합니다.")
+                    st.caption("Grad-CAM은 보조 지표예요 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요해요.")
             else:
-                st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 진단 결과와 Grad-CAM 히트맵이 표시됩니다.")
+                st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 진단 결과와 Grad-CAM 히트맵을 볼 수 있어요.")
 
             # 예시 사진 갤러리 — 결과 아래에 배치(사진 없는 외부 체험용, 클릭하면 위 결과가 갱신됨)
             if samples:
@@ -285,9 +285,9 @@ def render():
                     for lab, c in dets:
                         st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
                 else:
-                    st.info("임계값 이상으로 검출된 잎이 없습니다. conf 슬라이더를 낮춰 보세요.")
+                    st.info("임계값 이상으로 검출된 잎이 없어요. conf 슬라이더를 낮춰 보세요.")
             else:
-                st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 잎 위치 박스와 정상/질병 라벨이 표시됩니다.")
+                st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 잎 위치 박스와 정상/질병 라벨을 볼 수 있어요.")
 
             # 예시 사진 갤러리 — 결과 아래에 배치(클릭하면 위쪽 검출 결과가 갱신됨)
             if det_samples:
