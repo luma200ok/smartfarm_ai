@@ -32,11 +32,14 @@ if str(_SRC) not in sys.path:
 
 from llm import history  # noqa: E402
 from llm.rag import retrieve  # noqa: E402
-from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS, get_forecast  # noqa: E402
+from llm.tools import TOOL_REGISTRY, TOOL_SCHEMAS, get_diagnosis, get_forecast  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT / ".env", override=True)
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+# 이슈 #18 — fast-path 최종 처방 작성 전용 모델(서버 벤치: exaone3.5:2.4b가 품질·속도 우수).
+# 미설정 시 기존 MODEL로 폴백(하위호환).
+WRITER_MODEL = os.getenv("OLLAMA_WRITER_MODEL") or MODEL
 
 MAX_TOOL_ROUNDS = 4
 KEEP_ALIVE = "30m"
@@ -122,6 +125,106 @@ def _rag_sources(chunks: list[dict]) -> list[str]:
     return out
 
 
+WRITER_SYSTEM_PROMPT = (
+    "너는 토마토 재배 초보자를 돕는 한국어 재배 도우미다. 아래 진단·근거·예측 정보를 바탕으로 "
+    "최종 처방만 작성한다(도구 호출은 하지 않는다).\n"
+    "규칙(반드시 지켜라):\n"
+    "1) 아는 범위는 잎마름역병(late_blight)·잎곰팡이병·정상·tylcv 4종뿐 — 그 밖은 지어내지 말고 '진단 보류'.\n"
+    "2) 진단이 차단(ood_blocked)됐으면 병명을 단정하지 말고 재촬영을 안내한다.\n"
+    "3) 초보자 눈높이 쉬운 말로, 어려운 용어는 풀어 설명한다.\n"
+    "4) 재배가이드 근거가 있으면 그에 부합하게 처방하고, 근거 없는 약제명·수치는 지어내지 않는다.\n"
+    "5) 환경 예측(다음날 온도·습도위험) 정보가 있으면 진단과 교차해 시간축 선제 조치를 제안한다.\n"
+    "최종 답변은 지정된 JSON 스키마로만 출력한다."
+)
+
+
+def _inject_directives(messages: list, user_msg: str, diag: dict | None,
+                        on_progress) -> list[str]:
+    """공통 후처리 — guard·RAG·forecast 지시문을 messages에 주입하고 근거출처 목록을 돌려준다.
+
+    prescribe()(agentic)·prescribe_fast()(#18) 양쪽이 공유한다.
+    """
+    messages.append({"role": "system", "content": _guard_directive(diag)})
+
+    rag_chunks: list[dict] = []
+    if diag and diag.get("label") and not diag.get("ood_blocked") and not diag.get("error"):
+        on_progress("rag")
+        try:
+            rag_chunks = retrieve(user_msg, disease=diag["label"], k=3)
+        except Exception as e:                           # 임베딩/코퍼스 실패해도 처방은 계속
+            _log.warning("RAG 검색 실패 — 근거 없이 진행: %s", e)
+        if rag_chunks:
+            messages.append({"role": "system", "content": _rag_directive(rag_chunks)})
+    sources = _rag_sources(rag_chunks)
+
+    if diag and diag.get("label") in ("leaf_mold", "late_blight") and not diag.get("ood_blocked") and not diag.get("error"):
+        on_progress("forecast")
+        fc = get_forecast()
+        if fc and not fc.get("unavailable"):
+            messages.append({"role": "system", "content": _forecast_directive(fc)})
+
+    return sources
+
+
+def _write_final(messages: list, user_msg: str, image_path: str | None, diag: dict | None,
+                  sources: list[str], on_progress, model: str) -> Prescription:
+    """공통 후처리 — 최종 구조화 JSON 생성(스키마 위반 1회 재시도) + 안전 폴백 + history 저장."""
+    on_progress("writing")
+    last_err = None
+    for _ in range(2):                                   # 스키마 위반 시 1회 재시도
+        final = ollama.chat(model=model, messages=messages,
+                            format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
+        try:
+            presc = Prescription.model_validate_json(final["message"]["content"])
+            presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
+            history.save_prescription(user_msg, image_path, diag, presc)
+            return presc
+        except ValidationError as e:
+            last_err = e
+            messages.append({"role": "system",
+                             "content": "직전 출력이 스키마와 맞지 않았다. 반드시 지정된 JSON 스키마로만 다시 출력하라."})
+    _log.warning("구조화 출력 검증 실패 — 안전 폴백 반환: %s", last_err)
+    presc = Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
+                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources)
+    history.save_prescription(user_msg, image_path, diag, presc)
+    return presc
+
+
+def prescribe_fast(user_msg: str, image_path: str | None = None,
+                    on_progress: "Callable[[str], None] | None" = None) -> Prescription:
+    """이슈 #18 — fast-path(1-call) 처방. tool 실행을 코드가 직행시키고 LLM은 최종 작성 1회만.
+
+    처방 버튼 경로 전용(흐름 고정). CLI·비교 데모는 기존 prescribe()(agentic tool calling)를 유지.
+    """
+    def _progress(stage: str) -> None:
+        if on_progress is None:
+            return
+        try:                                              # 콜백 예외가 처방 자체를 죽이지 않게
+            on_progress(stage)
+        except Exception as e:
+            _log.warning("on_progress 콜백 실패(%s) — 처방은 계속 진행: %s", stage, e)
+
+    diag = None
+    if image_path:
+        _progress("diagnosis")
+        try:
+            diag = get_diagnosis(image_path)
+        except Exception as e:                            # tool 실패도 정직하게 알려줌(환각 방지)
+            diag = {"error": f"{type(e).__name__}: {e}"}
+
+    content = user_msg
+    if image_path:
+        content += f"\n\n(첨부된 잎 사진 경로: {image_path})"
+    messages = [{"role": "system", "content": WRITER_SYSTEM_PROMPT},
+                {"role": "user", "content": content}]
+    if diag is not None:
+        messages.append({"role": "system",
+                         "content": "진단 결과: " + json.dumps(diag, ensure_ascii=False)})
+
+    sources = _inject_directives(messages, user_msg, diag, _progress)
+    return _write_final(messages, user_msg, image_path, diag, sources, _progress, WRITER_MODEL)
+
+
 def prescribe(user_msg: str, image_path: str | None = None,
               on_progress: "Callable[[str], None] | None" = None) -> Prescription:
     """사용자 메시지(+선택 잎 사진) → 구조화 자연어 처방.
@@ -186,46 +289,8 @@ def prescribe(user_msg: str, image_path: str | None = None,
     else:
         _log.warning("tool 호출이 %d라운드 내 종료되지 않음 — 마지막 상태로 처방 생성.", MAX_TOOL_ROUNDS)
 
-    messages.append({"role": "system", "content": _guard_directive(diag)})
-
-    # RAG — 진단됐고 차단·오류 아니면 라벨로 재배가이드 근거 검색 후 주입
-    rag_chunks: list[dict] = []
-    if diag and diag.get("label") and not diag.get("ood_blocked") and not diag.get("error"):
-        _progress("rag")
-        try:
-            rag_chunks = retrieve(user_msg, disease=diag["label"], k=3)
-        except Exception as e:                           # 임베딩/코퍼스 실패해도 처방은 계속
-            _log.warning("RAG 검색 실패 — 근거 없이 진행: %s", e)
-        if rag_chunks:
-            messages.append({"role": "system", "content": _rag_directive(rag_chunks)})
-    sources = _rag_sources(rag_chunks)
-
-    # 시간축 처방 — 습도 민감 병해(잎곰팡이병·잎마름역병)면 환경 예측을 교차 주입
-    if diag and diag.get("label") in ("leaf_mold", "late_blight") and not diag.get("ood_blocked") and not diag.get("error"):
-        _progress("forecast")
-        fc = get_forecast()
-        if fc and not fc.get("unavailable"):
-            messages.append({"role": "system", "content": _forecast_directive(fc)})
-
-    _progress("writing")
-    last_err = None
-    for _ in range(2):                                   # 스키마 위반 시 1회 재시도
-        final = ollama.chat(model=MODEL, messages=messages,
-                            format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
-        try:
-            presc = Prescription.model_validate_json(final["message"]["content"])
-            presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
-            history.save_prescription(user_msg, image_path, diag, presc)
-            return presc
-        except ValidationError as e:
-            last_err = e
-            messages.append({"role": "system",
-                             "content": "직전 출력이 스키마와 맞지 않았다. 반드시 지정된 JSON 스키마로만 다시 출력하라."})
-    _log.warning("구조화 출력 검증 실패 — 안전 폴백 반환: %s", last_err)
-    presc = Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
-                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources)
-    history.save_prescription(user_msg, image_path, diag, presc)
-    return presc
+    sources = _inject_directives(messages, user_msg, diag, _progress)
+    return _write_final(messages, user_msg, image_path, diag, sources, _progress, MODEL)
 
 
 if __name__ == "__main__":
