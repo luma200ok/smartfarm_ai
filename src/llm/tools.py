@@ -102,8 +102,8 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_diagnosis",
-            "description": "토마토 잎 사진을 진단한다(잎마름역병/잎곰팡이병/정상/tylcv 4종). "
-                           "잎이 아니면 진단 대신 차단 사유를 돌려준다.",
+            "description": "토마토 잎 사진을 진단한다(잎마름역병 late_blight/잎곰팡이병 leaf_mold/"
+                           "정상 normal/tylcv 4종). 잎이 아니면 진단 대신 차단 사유를 돌려준다.",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -186,6 +186,31 @@ def test_prescribe_tool_round_caps_num_predict_and_sets_keep_alive():
     assert final_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
 
 
+def test_prescribe_warns_when_diagnosis_not_called_with_image(monkeypatch, caplog):
+    """P1 — 이미지 첨부됐는데 tool 미호출로 종료되면 경고 로그로 가시화(조용한 '진단 보류' 방지)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    with caplog.at_level("WARNING"):
+        with patch("ollama.chat", side_effect=responses):
+            prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
+    assert any("tool 호출 없이 종료" in r.message for r in caplog.records)
+
+
+def test_prescribe_on_progress_exception_does_not_break_prescription():
+    """P2-1 — on_progress 콜백이 raise해도 처방은 정상 반환된다."""
+    def _boom(stage):
+        raise RuntimeError("ui 콜백 실패")
+
+    with patch("ollama.chat", side_effect=[
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]):
+        p = prescribe.prescribe("오이 병도 알려줘", on_progress=_boom)
+    assert isinstance(p, Prescription)
+
+
 def test_prescribe_on_progress_reports_stages(monkeypatch):
     """C3(#15) — on_progress 콜백이 diagnosis→rag→forecast→writing 단계 순서로 호출된다."""
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",

@@ -41,8 +41,9 @@ MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 MAX_TOOL_ROUNDS = 4
 KEEP_ALIVE = "30m"
 # tool 라운드 중 자유텍스트로 흐를 때(다음 라운드에서 버려지는 응답) 낭비를 줄이는 캡.
-# tool_calls 자체는 num_predict 캡과 무관하게 정상 생성됨(짧은 함수호출 토큰이라 영향 적음).
-TOOL_ROUND_NUM_PREDICT = 128
+# 128은 tool_calls 자체까지 잘라 조용한 진단 미실행("진단 보류")을 유발할 수 있어 512로 상향—
+# 여전히 300tok대 낭비 라운드보다는 짧지만, 정상 tool_calls 토큰 길이엔 여유를 둔다.
+TOOL_ROUND_NUM_PREDICT = 512
 
 SYSTEM_PROMPT = (
     "너는 토마토 재배 초보자를 돕는 한국어 재배 도우미다.\n"
@@ -132,8 +133,12 @@ def prescribe(user_msg: str, image_path: str | None = None,
     선택적 콜백. 기본 None이면 기존과 완전히 동일하게 동작한다(하위호환, CLI·pipeline.py 무영향).
     """
     def _progress(stage: str) -> None:
-        if on_progress is not None:
+        if on_progress is None:
+            return
+        try:                                              # P2-1: 콜백 예외가 처방 자체를 죽이지 않게
             on_progress(stage)
+        except Exception as e:
+            _log.warning("on_progress 콜백 실패(%s) — 처방은 계속 진행: %s", stage, e)
 
     content = user_msg
     if image_path:
@@ -144,7 +149,7 @@ def prescribe(user_msg: str, image_path: str | None = None,
     diag = None
     _progress("diagnosis")
     for _ in range(MAX_TOOL_ROUNDS):
-        # C1(#15) — 다음 tool 라운드에서 어차피 버려지는 자유텍스트 장문 생성을 128tok으로 캡.
+        # C1(#15) — 다음 tool 라운드에서 어차피 버려지는 자유텍스트 장문 생성을 캡으로 축소.
         # tool_calls를 원하면 여전히 허용(tools=는 그대로 넘김) — 환각방어·MAX_TOOL_ROUNDS 로직 불변.
         resp = ollama.chat(model=MODEL, messages=messages, tools=TOOL_SCHEMAS,
                            options={"num_predict": TOOL_ROUND_NUM_PREDICT}, keep_alive=KEEP_ALIVE)
@@ -152,6 +157,12 @@ def prescribe(user_msg: str, image_path: str | None = None,
         messages.append(msg)
         calls = msg.get("tool_calls") or []
         if not calls:
+            if image_path and diag is None:
+                # 이미지가 첨부됐는데 get_diagnosis가 한 번도 호출되지 않은 채 종료 —
+                # num_predict 캡에 의한 tool_calls 잘림 의심을 포함해 가시화(조용한 "진단 보류" 방지).
+                _log.warning(
+                    "이미지가 첨부됐는데 tool 호출 없이 종료됨(num_predict=%d 캡에 의한 잘림 의심) "
+                    "— 진단 미실행 상태로 처방 생성됨.", TOOL_ROUND_NUM_PREDICT)
             break
         for tc in calls:
             name = tc["function"]["name"]
