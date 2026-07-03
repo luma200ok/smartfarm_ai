@@ -79,6 +79,37 @@ def test_hysteresis_cooling_turns_off_after_deadband_recovery():
     assert any(log.device == "cooling_fan" and log.action == "OFF" for log in logs)
 
 
+# ── 습도 밴드 중앙 목표 OFF 판정(이슈 #33) ───────────────────────────────
+def test_hum_dehumidifier_stays_on_until_mid_reached():
+    """제습기 ON 후 밴드 안(85% 아래)이어도 중앙(72.5%)에서 데드밴드(2.0) 밖이면 유지."""
+    states = default_states()
+    decide(_reading(hum=90.0), _sp(), states, date="d1")
+    assert states["dehumidifier"].on is True
+    logs = decide(_reading(hum=80.0), _sp(), states, date="d2")  # 밴드 안, 중앙과 거리 7.5 > 2.0
+    assert states["dehumidifier"].on is True
+    assert logs == []
+
+
+def test_hum_dehumidifier_turns_off_near_mid():
+    """중앙(72.5%) 데드밴드(2.0) 이내로 들어오면 OFF."""
+    states = default_states()
+    decide(_reading(hum=90.0), _sp(), states, date="d1")
+    assert states["dehumidifier"].on is True
+    logs = decide(_reading(hum=73.0), _sp(), states, date="d2")  # |73-72.5|=0.5 <= 2.0
+    assert states["dehumidifier"].on is False
+    assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs)
+
+
+def test_hum_humidifier_turns_off_near_mid_symmetric():
+    """가습기도 동일 — 중앙 근접 시 OFF(저습 대칭)."""
+    states = default_states()
+    decide(_reading(hum=50.0), _sp(), states, date="d1")
+    assert states["humidifier"].on is True
+    logs = decide(_reading(hum=72.0), _sp(), states, date="d2")  # |72-72.5|=0.5 <= 2.0
+    assert states["humidifier"].on is False
+    assert any(log.device == "humidifier" and log.action == "OFF" for log in logs)
+
+
 # ── 수동 오버라이드 제외 ────────────────────────────────────────────────
 def test_manual_device_excluded_from_auto_decision():
     states = default_states()
