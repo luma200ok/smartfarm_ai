@@ -5,6 +5,7 @@ st.navigation 2그룹 구성(이슈 #10):
   [서비스] 농장 대시보드 / 잎 병해 진단 / AI 처방 / 환경 모니터링 / 작물 환경 추천
   [프로젝트 기록] 프로젝트 개요·성과 / ML 실험 기록 / DL 실험 기록
 set_page_config 는 여기서 1회만 호출(각 view의 render() 에서는 호출 금지).
+페이지 객체(st.Page)는 app/nav.py가 단일 진실로 소유 — st.page_link에서도 동일 인스턴스를 참조한다.
 
 실행:  streamlit run app/streamlit_app.py   (프로젝트 루트에서)
 """
@@ -21,30 +22,9 @@ sys.path.insert(0, str(_APP_DIR / "views"))
 
 st.set_page_config(page_title="SmartFarm AI", page_icon="🌱", layout="wide")
 
-from ui import inject_css               # noqa: E402
-from dashboard import render as dashboard   # noqa: E402
-from diagnosis import render as diagnosis   # noqa: E402
-from prescribe import render as prescribe   # noqa: E402
-from monitor import render as monitor       # noqa: E402
-from crops import render as crops           # noqa: E402
-from about import render as about           # noqa: E402
-from ml_eval import render as ml_eval       # noqa: E402
-from dl_eval import render as dl_eval       # noqa: E402
+from ui import inject_css   # noqa: E402
+import nav                  # noqa: E402
 
 inject_css()
 
-nav = st.navigation({
-    "서비스": [
-        st.Page(dashboard, title="농장 대시보드",    icon="🏠", url_path="home", default=True),
-        st.Page(diagnosis, title="잎 병해 진단",      icon="🔬", url_path="diagnosis"),
-        st.Page(prescribe, title="AI 처방",          icon="💊", url_path="prescribe"),
-        st.Page(monitor,   title="환경 모니터링",     icon="🌡️", url_path="monitor"),
-        st.Page(crops,     title="작물 환경 추천",    icon="🌾", url_path="crops"),
-    ],
-    "프로젝트 기록": [
-        st.Page(about,   title="프로젝트 개요·성과", icon="📈", url_path="about"),
-        st.Page(ml_eval, title="ML 실험 기록",        icon="📊", url_path="ml-eval"),
-        st.Page(dl_eval, title="DL 실험 기록",        icon="📊", url_path="dl-eval"),
-    ],
-})
-nav.run()
+st.navigation(nav.NAV_GROUPS).run()

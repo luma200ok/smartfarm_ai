@@ -118,16 +118,24 @@ def render_recent_chart(vs):
 
 
 def render_shortcuts():
-    """기능 바로가기 카드 3장."""
+    """기능 바로가기 카드 3장.
+
+    st.page_link는 st.Page 인스턴스를 받아야 streamlit_app.py의 st.navigation 등록과
+    매칭된다(파일 경로 문자열을 넘기면 StreamlitPageNotFoundError로 크래시 — 이슈 #10 P1-1).
+    nav 모듈은 함수 내부에서 지연 임포트해 dashboard.py 모듈 로드 시점의 순환 참조를 피한다
+    (app/nav.py가 이 모듈의 render를 임포트하므로).
+    """
+    import nav
+
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.page_link("views/diagnosis.py", label="🔬 잎 병해 진단", icon="🔬")
+        st.page_link(nav.PAGE_DIAGNOSIS, label="🔬 잎 병해 진단", icon="🔬")
         st.caption("잎 사진을 업로드해 병해를 진단해요.")
     with c2:
-        st.page_link("views/prescribe.py", label="💊 AI 처방", icon="💊")
+        st.page_link(nav.PAGE_PRESCRIBE, label="💊 AI 처방", icon="💊")
         st.caption("진단 결과로 자연어 처방을 받아요.")
     with c3:
-        st.page_link("views/monitor.py", label="🌡️ 환경 모니터링", icon="🌡️")
+        st.page_link(nav.PAGE_MONITOR, label="🌡️ 환경 모니터링", icon="🌡️")
         st.caption("가상 센서를 재생하며 경보·예보를 확인해요.")
 
 
