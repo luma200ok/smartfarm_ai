@@ -193,7 +193,7 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
     반대 장치가 즉시 켜지는 교대 진동을 막는다. 기존 물리 클램프(base±CTRL_TEMP_BAND℃·
     습도 0~100%)는 그대로 유지(비현실적 발산 방지).
 
-    반환: [{hour, out_temp, base_temp, ctrl_temp, base_hum, ctrl_hum, devices_on, events}]
+    반환: [{hour, out_temp, base_temp, ctrl_temp, out_hum, base_hum, ctrl_hum, devices_on, events}]
     (events = 그 시간대에 발생한 ControlLog 목록).
     """
     from control import controller
@@ -245,7 +245,8 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
 
         timeline.append({
             "hour": item["hour"], "out_temp": item["out_temp"], "base_temp": item["base_temp"],
-            "ctrl_temp": ctrl_temp, "base_hum": item["base_hum"], "ctrl_hum": ctrl_hum,
+            "ctrl_temp": ctrl_temp, "out_hum": item.get("out_hum"),
+            "base_hum": item["base_hum"], "ctrl_hum": ctrl_hum,
             "devices_on": devices_on, "events": logs,
         })
 

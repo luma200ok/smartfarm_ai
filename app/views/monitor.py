@@ -430,11 +430,16 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
 
     long_df = df.melt(id_vars=["hour"], value_vars=value_cols, var_name="구분", value_name="값")
     long_df, color_domain, color_range = _split_control_segments(long_df, value_cols, split_col, now_hour)
+    # 비제어(제어 없음) 계열은 팔레트 순번과 무관하게 항상 회색으로 고정(이슈 #37) —
+    # "얇은 회색 반투명" 요구사항을 팔레트 인덱스에 의존하지 않게 보장.
+    color_range = ["#999999" if "(제어 없음)" in name else c
+                   for name, c in zip(color_domain, color_range)]
 
     long_df["_선"] = long_df["구분"].apply(lambda v: "계획" if v.endswith("(계획)") else "실행")
-    # 기준선 계열은 얇게/반투명, 그 외(제어 후 등)는 굵게 — 교차 구간 가독성(이슈 #35 C3)
-    long_df["_굵기"] = long_df["구분"].apply(lambda v: 1.5 if "기준선" in v else 3.0)
-    long_df["_불투명"] = long_df["구분"].apply(lambda v: 0.55 if "기준선" in v else 1.0)
+    # 비제어(기준선) 계열은 얇은 회색 반투명, 그 외(제어 후 등)는 굵게 — 교차 구간
+    # 가독성(이슈 #35 C3) + 토글 시 시각적으로 "비교용 참고선"임을 드러냄(이슈 #37)
+    long_df["_굵기"] = long_df["구분"].apply(lambda v: 1.5 if "(제어 없음)" in v else 3.0)
+    long_df["_불투명"] = long_df["구분"].apply(lambda v: 0.55 if "(제어 없음)" in v else 1.0)
 
     lines = alt.Chart(long_df).mark_line(point=True).encode(
         x=alt.X("hour:Q", title="시간(시)", scale=alt.Scale(domain=[0, max_hour])),
@@ -522,23 +527,28 @@ def render_live_tab(setpoints):
     render_setpoints(setpoints)
     render_live_devices(states, cur["devices_on"])
 
-    section("📈 오늘 0~24시 추이", "외기·제어 전 기준선·제어 후 내부값 — 밴드를 벗어나면 장치가 자동으로 대응해요.")
-    rows = [{"hour": t["hour"], "외기": t["out_temp"], "제어 전(기준선)": t["base_temp"],
-             "제어 후": t["ctrl_temp"],
-             "제어 전 습도(기준선)": t["base_hum"], "제어 후 습도": t["ctrl_hum"]} for t in timeline]
+    section("📈 오늘 0~24시 추이", "외기·제어 후 내부값 — 밴드를 벗어나면 장치가 자동으로 대응해요.")
+    show_baseline = st.checkbox(
+        "제어 없을 때와 비교해서 보기", value=False, key="live_trend_show_baseline")
+    rows = [{"hour": t["hour"], "외부 온도": t["out_temp"], "실내 온도(제어)": t["ctrl_temp"],
+             "실내 온도(제어 없음)": t["base_temp"],
+             "외부 습도": t["out_hum"], "실내 습도(제어)": t["ctrl_hum"],
+             "실내 습도(제어 없음)": t["base_hum"]} for t in timeline]
+    temp_cols = ["외부 온도", "실내 온도(제어)"] + (["실내 온도(제어 없음)"] if show_baseline else [])
+    hum_cols = ["외부 습도", "실내 습도(제어)"] + (["실내 습도(제어 없음)"] if show_baseline else [])
     temp_col, hum_col = st.columns(2)
     with temp_col:
         st.altair_chart(_live_trend_chart(
-            rows, ["외기", "제어 전(기준선)", "제어 후"],
+            rows, temp_cols,
             setpoints.temp_low, setpoints.temp_high, now_hour,
-            split_col="제어 후"), use_container_width=True)
-        st.caption("점선=지금 · 음영=지금 이후(기상청 예보 기반 예측)")
+            split_col="실내 온도(제어)"), use_container_width=True)
+        st.caption("점선 구간 = 예보 기반 예측")
     with hum_col:
         st.altair_chart(_live_trend_chart(
-            rows, ["제어 전 습도(기준선)", "제어 후 습도"],
+            rows, hum_cols,
             setpoints.hum_low, setpoints.hum_high, now_hour,
-            split_col="제어 후 습도"), use_container_width=True)
-        st.caption("점선=지금 · 음영=지금 이후(기상청 예보 기반 예측)")
+            split_col="실내 습도(제어)"), use_container_width=True)
+        st.caption("점선 구간 = 예보 기반 예측")
 
     events = [{"hour": t["hour"], "시간": f"{t['hour']:02d}시",
                "장치": DEVICE_LABEL_KR.get(log.device, log.device),

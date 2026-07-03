@@ -50,6 +50,23 @@ def test_monitor_page_renders_without_exception_on_kma_success(_kma_success):
     assert not at.exception, f"페이지 렌더 중 예외 발생: {[str(e) for e in at.exception]}"
 
 
+def test_live_trend_baseline_toggle_default_off_and_togglable(_kma_success):
+    """이슈 #37 — "제어 없을 때와 비교해서 보기" 체크박스는 기본 꺼짐(False)이고,
+    켜면 페이지가 예외 없이 재실행돼야 한다(비제어 기준선 라인 추가 렌더 경로)."""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(MONITOR_PAGE))
+    at.run(timeout=30)
+    assert not at.exception
+
+    checkboxes = [cb for cb in at.checkbox if cb.key == "live_trend_show_baseline"]
+    assert len(checkboxes) == 1
+    assert checkboxes[0].value is False
+
+    checkboxes[0].set_value(True).run(timeout=30)
+    assert not at.exception
+
+
 def test_monitor_module_defines_datetime_symbol_used_by_render_live_tab():
     """render_live_tab()이 참조하는 datetime 심볼이 모듈 전역에 실제로 바인딩돼 있는지 확인
     (import 라인 자체의 회귀를 가장 직접적으로 잡는 저비용 가드)."""
