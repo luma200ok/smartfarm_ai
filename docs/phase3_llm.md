@@ -118,7 +118,8 @@ DL이 주는 *확률·게이트·클래스 목록*을 그대로 활용해 "AI가
 - **시간축 처방(5-4)**: 습도 민감 병해(잎곰팡이병·잎마름역병) 진단 시 환경 예측을 교차 주입 — ML+DL+LLM이 한 처방에서 만남.
 - **자동 감시**: `src/llm/monitor.py` — 가상센서 스트림 재생 → 임계 판정 → 디스코드 Webhook 알림(레벨 전이 시만 발송, 전송 실패 시 재시도).
 - **처방 지연 개선(이슈 #15)**: tool 라운드 `num_predict` 캡(버려지는 자유텍스트 장문 차단) + 모든 Ollama 호출 `keep_alive=30m`(5분 idle 콜드 재적재 제거) + 프롬프트 다이어트(-17~20% 토큰, 환각 방어·JSON 스키마 지시는 유지) → 로컬 웜 기준 **28초 → 17~19초(약 -35%)**. 남는 대기는 `st.status` 단계별 진행 표시로 체감 보완.
-- 테스트는 전체 스위트 137개 PASS(통합 테스트는 실 Ollama 필요 시). 상세 현황은 [STATUS.md](STATUS.md).
+- **처방 fast-path(이슈 #18)**: OCI(3코어 CPU) 서버에서 tool 라운드 2회가 342초 → 진단·RAG·예보를 **코드가 직접 실행**하고 LLM은 최종 JSON 처방 작성 **1-call**만 하는 fast-path로 전환 + writer 모델 분리(`OLLAMA_WRITER_MODEL` — 서버 `exaone3.5:2.4b`, 로컬은 기존 14b) → **서버 342.6→16.2초(-95%)**, 로컬 10~15초. 환각 방어·근거 코드 주입은 그대로, agentic(tool calling) 경로는 CLI·날씨 Q&A에 보존.
+- 테스트는 전체 스위트 PASS(통합 테스트는 실 Ollama 필요 시). 상세 현황은 [STATUS.md](STATUS.md).
 - 🔗 라이브 데모: https://smartfarm-ai.luma200ok.com
 
 ## 10. 배운점 (Learned)
