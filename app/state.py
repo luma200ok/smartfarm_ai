@@ -15,6 +15,16 @@ K_VSENSOR = "monitor.vsensor"
 K_LAST_WARNING = "monitor.last_warning"
 K_WEATHER_QA_ANSWER = "monitor.weather_qa_answer"
 
+# ── monitor.py — 관제형 대시보드(이슈 #17) ──
+K_SETPOINTS = "monitor.setpoints"
+K_DEVICE_STATES = "monitor.device_states"
+K_CONTROL_LOG = "monitor.control_log"
+K_CONTROL_ACTIVE = "monitor.control_active_alerts"
+K_CONTROL_LAST_DATE = "monitor.control_last_date"
+K_RECENT_READINGS = "monitor.recent_readings"
+K_DISCORD_CONTROL_TOGGLE = "monitor.discord_control_toggle"
+K_CONTROL_YEAR = "monitor.control_year"   # 연도별 제어 상태 리셋 판단용(이슈 #17 P2-1)
+
 
 def get_vsensor(year):
     """연도별 VirtualSensor 인스턴스 확보(캐시 재사용) — 구 phase3의 vsensor 생성 로직 그대로 이관.

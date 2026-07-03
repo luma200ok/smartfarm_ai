@@ -56,16 +56,22 @@ class VirtualSensor:
         self.cursor = WINDOW - 1          # 예측 가능한 첫 시점(최근 7일 확보)
         self._injections: list[dict] = []   # 시뮬 주입(오프셋) — 원본 series는 불변
 
-    def inject(self, feature: str, start, days: int, delta: float) -> None:
+    def inject(self, feature: str, start, days: int, delta: float, tag: str = "scenario") -> None:
         """feature(예: 온도외부_평균)에 start(날짜 또는 인덱스)부터 days일간 delta를 더한다.
 
-        원본 self.series는 변경하지 않고 reading()/window() 반환값에만 적용(read-time overlay)."""
+        원본 self.series는 변경하지 않고 reading()/window() 반환값에만 적용(read-time overlay).
+        tag로 주입 출처를 구분(기본 "scenario") — clear_injections(tag=...)로 선택 해제 가능
+        (이슈 #17 P1-1: 시나리오 재적용이 제어 효과 주입까지 지우는 것을 방지)."""
         idx = self.dates.index(start) if isinstance(start, str) else int(start)
-        self._injections.append({"feature": feature, "start": idx, "end": idx + days - 1, "delta": delta})
+        self._injections.append({"feature": feature, "start": idx, "end": idx + days - 1,
+                                  "delta": delta, "tag": tag})
 
-    def clear_injections(self) -> None:
-        """주입 전부 해제 — '정상' 시나리오로 복귀."""
-        self._injections = []
+    def clear_injections(self, tag: str | None = None) -> None:
+        """주입 해제 — tag=None(기본)이면 전부, tag 지정 시 해당 태그만 해제."""
+        if tag is None:
+            self._injections = []
+        else:
+            self._injections = [inj for inj in self._injections if inj.get("tag") != tag]
 
     def _apply_injections(self, arr: np.ndarray, abs_indices: list[int]) -> np.ndarray:
         if not self._injections:
@@ -122,13 +128,14 @@ SCENARIOS = ("정상", "한파", "히터고장")
 
 
 def apply_scenario(vs: "VirtualSensor", name: str, days: int = 3) -> None:
-    """vs 현재 커서 기준으로 프리셋 주입(먼저 기존 주입을 모두 해제)."""
-    vs.clear_injections()
+    """vs 현재 커서 기준으로 프리셋 주입(기존 "scenario" 태그 주입만 해제 — "control" 태그인
+    제어 효과 주입(control.effects.apply_effects)은 건드리지 않는다, 이슈 #17 P1-1)."""
+    vs.clear_injections(tag="scenario")
     if name == "한파":
-        vs.inject("온도외부_평균", vs.cursor, days, -10.0)
-        vs.inject("온도내부_평균", vs.cursor, days, -5.0)
-        vs.inject("온도내부_최저", vs.cursor, days, -5.0)
+        vs.inject("온도외부_평균", vs.cursor, days, -10.0, tag="scenario")
+        vs.inject("온도내부_평균", vs.cursor, days, -5.0, tag="scenario")
+        vs.inject("온도내부_최저", vs.cursor, days, -5.0, tag="scenario")
     elif name == "히터고장":
-        vs.inject("온도내부_평균", vs.cursor, days, -8.0)
-        vs.inject("온도내부_최저", vs.cursor, days, -8.0)
-    # "정상"은 clear_injections()만으로 충분
+        vs.inject("온도내부_평균", vs.cursor, days, -8.0, tag="scenario")
+        vs.inject("온도내부_최저", vs.cursor, days, -8.0, tag="scenario")
+    # "정상"은 clear_injections(tag="scenario")만으로 충분

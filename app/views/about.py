@@ -124,7 +124,7 @@ def render():
                 "토양수분 30% 낮음 — 관수\n\n"
                 "2시간 뒤 32℃ — 환기 준비"
             )
-        st.caption("👈 «AI 처방»·«환경 모니터링» 페이지에서 데모를 실행하세요  ·  "
+        st.caption("👈 «AI 처방»·«환경 관제» 페이지에서 데모를 실행하세요  ·  "
                    f"[📄 로드맵]({REPO}/blob/main/docs/roadmap.md)")
 
     st.divider()

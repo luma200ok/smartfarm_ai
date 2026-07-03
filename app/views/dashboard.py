@@ -135,8 +135,8 @@ def render_shortcuts():
         st.page_link(nav.PAGE_PRESCRIBE, label="💊 AI 처방", icon="💊")
         st.caption("진단 결과로 자연어 처방을 받아요.")
     with c3:
-        st.page_link(nav.PAGE_MONITOR, label="🌡️ 환경 모니터링", icon="🌡️")
-        st.caption("가상 센서를 재생하며 경보·예보를 확인해요.")
+        st.page_link(nav.PAGE_MONITOR, label="🌡️ 환경 관제", icon="🌡️")
+        st.caption("가상 센서를 재생하며 설정 밴드 기반 자동제어·경보를 확인해요.")
 
 
 def render():
