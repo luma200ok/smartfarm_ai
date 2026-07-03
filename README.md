@@ -100,7 +100,7 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 - ✅ **날씨 인지 모니터링(이슈 #6 완결)** — "외기 조건 → 정상 시 내부 기대값" 회귀(`src/ml/train_expect.py`, XGB GKF-MAE 평균 1.11℃/최저 1.44℃)로 ①**원인 구분 경보**(같은 저온 이탈도 한파=외기 요인 vs 온화한데 이탈=설비 고장 의심, 잔차 σ 분류) ②**equip_anom** 조기 감지(임계 도달 전 기대 대비 ±2σ 이탈) ③**feedforward 사전 경보**(KMA 예보→내일 내부 최저 예측, `monitor.py --feedforward`) ④가상센서 **시나리오 데모**(한파/히터고장 주입 → 기대값 ±2σ 밴드 차트로 원인 구분 시연). 모델 파일 `models/env_expect_reg.pkl`(gitignore, `push_models.sh` 배포). ⚠️ macOS 로컬에서 torch+xgboost 동시 로드 시 libomp 세그폴트 가능 — `OMP_NUM_THREADS=1`로 실행(서버는 무관).
 - ✅ **PostgreSQL + pgvector(선택)** — `RAG_BACKEND=pgvector`면 RAG 검색이 npz 대신 PG(`rag_chunks`)를 쓰고, 처방·경보가 `prescriptions`/`alerts`에 이력으로 남는다. 기본은 `memory`(현행 npz, PG 불필요)이고 `DATABASE_URL` 미설정 시 완전히 비활성. pgvector 조회 실패 시 자동으로 memory 경로로 폴백(예외 전파 없음). 로컬 개발은 그대로 가볍게, 서버(OCI)만 풀 구성 — 자세한 설치는 `deploy/deploy_oci.md` §8. 로컬(`RAG_BACKEND=memory`)에서도 psycopg·pgvector **패키지**는 설치되지만 PostgreSQL **서버**는 불필요하다.
 
-**실행:** `streamlit run app/streamlit_app.py` → Phase 3 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
+**실행:** `streamlit run app/streamlit_app.py` → «AI 처방»·«환경 모니터링» 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
 
 **🎯 예시 처방:** 🔬 잎곰팡이병 의심 → 감염 잎 제거·습도↓ · 📖 근거: 농사로/NCPMS · 🌡️ 다음날 고습 예측 → 야간 환기
 
@@ -119,7 +119,7 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 smartfarm-ai/
 ├── src/ml/        preprocess.py · train.py          (Phase 1)
 ├── src/dl/        01_basics ~ 05_detect · prepare_tomato (Phase 2 — CNN·YOLO·LSTM)
-├── app/           home.py · phase1_ml.py · phase2_dl.py · phase3_llm.py  (Streamlit 멀티페이지, OCI 배포)
+├── app/           streamlit_app.py + views/(dashboard·diagnosis·prescribe·monitor·crops·about·ml_eval·dl_eval)  (Streamlit 멀티페이지, OCI 배포)
 ├── data/          데이터 (git 제외 — 포털에서 재다운)
 ├── models/        학습 모델 (.pt — git 제외, rsync 배포)
 └── docs/          PRD · 로드맵 · ADR · Phase 수행내역서 · 그림 · 트러블슈팅
@@ -143,7 +143,7 @@ smartfarm-ai/
 uv venv && uv pip install -r requirements.txt
 python src/ml/preprocess.py    # 환경 데이터 → 일별 집계
 python src/ml/train.py         # ML 모델 학습·평가·저장
-streamlit run app/streamlit_app.py   # 통합 데모(홈 + Phase 1~3)
+streamlit run app/streamlit_app.py   # 통합 데모(농장 대시보드 + 서비스 5종 + 프로젝트 기록 3종)
 ```
 
 </details>

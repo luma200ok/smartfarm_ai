@@ -1,13 +1,16 @@
 """
-Phase 2 (DL) — Streamlit 데모: 토마토 잎 사진 → 진단(+Grad-CAM) · 위치 검출(YOLO)
+잎 병해 진단 페이지 — 토마토 잎 사진 → 진단(+Grad-CAM) · 위치 검출(YOLO)
 
 탭1 진단: resnet18(전이학습) 추론 → 정상/질병 + '어디를 보고 판단했나' Grad-CAM 히트맵
 탭2 검출: YOLOv8n → 장면에서 잎을 찾아 박스 + 정상/질병 라벨 + 신뢰도
 멀티페이지: app/streamlit_app.py 가 render() 를 호출(set_page_config 는 엔트리에서 1회).
-단독 실행: streamlit run app/phase2_dl.py   (프로젝트 루트에서)
+단독 실행: streamlit run app/views/diagnosis.py   (프로젝트 루트에서)
 
 모델: models/tomato_resnet18.pt (진단) · models/tomato_yolov8n.pt (검출)
   없으면 → prepare_tomato.py → 02_core.py --chunk 2-5 / prepare_tomato_yolo.py → 05_detect.py
+
+TODO(이슈 #10 범위 밖): 이 추론 코드(load_model/predict_with_cam/detect 등)는
+구 app/phase2_dl.py에서 그대로 이동한 것 — src/dl/infer.py로의 통합은 별도 이슈에서 다룬다.
 """
 from pathlib import Path
 
@@ -18,7 +21,7 @@ import torch.nn.functional as F
 from PIL import Image
 import streamlit as st
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 CKPT = ROOT / "models" / "tomato_resnet18.pt"
 PART_CKPT = ROOT / "models" / "tomato_part.pt"   # 부위 분류기(과실/꽃/잎/줄기) — 잎 진단 게이트
 YOLO_CKPT = ROOT / "models" / "tomato_yolov8n.pt"
@@ -300,5 +303,5 @@ def render():
 
 if __name__ == "__main__":
     # 단독 실행 시에만 페이지 설정(멀티페이지에선 엔트리가 담당)
-    st.set_page_config(page_title="토마토 잎 진단 (Phase 2 DL)", page_icon="🍅")
+    st.set_page_config(page_title="잎 병해 진단", page_icon="🍅")
     render()
