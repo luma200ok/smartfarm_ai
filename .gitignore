@@ -15,6 +15,7 @@ data/*.xlsx
 data/*.zip
 data/images/
 data/control_setpoints.json
+data/control_live_state.json
 !data/.gitkeep
 
 # docs (로컬 전용 — 커밋 제외)
