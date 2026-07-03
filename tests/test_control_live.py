@@ -361,10 +361,15 @@ def _patch_notify(monkeypatch, sent: list):
 
 def test_run_notify_sends_on_first_run_and_dedups_second_run(
         monkeypatch, _isolated_state, _isolated_setpoints):
-    from datetime import date
+    """자정 연속성 폴백(이슈 #35, run_notify는 fallback_clamp=True) 하에서 0시 ctrl은
+    밴드 안에서 시작하므로, 장치 전환을 보려면 baseline이 시간에 따라 밴드 밖으로
+    드리프트해야 한다(과거처럼 평평한 프로파일은 클램프된 채 영원히 밴드 안에 머문다) —
+    ramp 프로파일 + now=12시로 확정적으로 재현."""
+    from datetime import date, datetime
     from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}  # 20℃(0시) → 43℃(23시), 밴드 상한 25 돌파
     monkeypatch.setattr(weather, "get_forecast_3d",
-                         lambda: _forecast({h: 30.0 for h in range(24)}, date_str="20260703"))
+                         lambda: _forecast(ramp, date_str="20260703"))
     monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
     _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
 
@@ -372,10 +377,11 @@ def test_run_notify_sends_on_first_run_and_dedups_second_run(
     _patch_notify(monkeypatch, sent)
 
     today = date(2026, 7, 3)
-    n1 = live.run_notify(dry_run=False, today=today)
-    assert n1 >= 1  # 첫 실행 — cooling_fan 등 장치 전환 발송
+    now = datetime(2026, 7, 3, 12, 0)
+    n1 = live.run_notify(dry_run=False, today=today, now=now)
+    assert n1 >= 1  # 첫 실행 — 드리프트로 밴드 초과, cooling_fan 등 장치 전환 발송
 
-    n2 = live.run_notify(dry_run=False, today=today)
+    n2 = live.run_notify(dry_run=False, today=today, now=now)
     assert n2 == 0  # 같은 상태 재실행 — 전환 없음, 발송 0건
 
 
@@ -408,24 +414,25 @@ def test_run_notify_uses_current_hour_not_timeline_end_for_transitions(
 
 
 def test_run_notify_resets_on_new_date(monkeypatch, _isolated_state, _isolated_setpoints):
-    from datetime import date
+    from datetime import date, datetime
     from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
     monkeypatch.setattr(weather, "get_forecast_3d",
-                         lambda: _forecast({h: 30.0 for h in range(24)}, date_str="20260703"))
+                         lambda: _forecast(ramp, date_str="20260703"))
     monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
     _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
 
     sent = []
     _patch_notify(monkeypatch, sent)
 
-    live.run_notify(dry_run=False, today=date(2026, 7, 3))
+    live.run_notify(dry_run=False, today=date(2026, 7, 3), now=datetime(2026, 7, 3, 12, 0))
     state = json.loads(_isolated_state.read_text())
     assert state["date"] == "2026-07-03"
 
     # 다음날 같은 forecast(date_str 다름으로 today_outdoor가 None 반환하지 않도록 갱신)
     monkeypatch.setattr(weather, "get_forecast_3d",
-                         lambda: _forecast({h: 30.0 for h in range(24)}, date_str="20260704"))
-    n = live.run_notify(dry_run=False, today=date(2026, 7, 4))
+                         lambda: _forecast(ramp, date_str="20260704"))
+    n = live.run_notify(dry_run=False, today=date(2026, 7, 4), now=datetime(2026, 7, 4, 12, 0))
     assert n >= 1  # 날짜가 바뀌어 상태 리셋 → 다시 전환으로 인식돼 발송
     state2 = json.loads(_isolated_state.read_text())
     assert state2["date"] == "2026-07-04"
@@ -433,10 +440,11 @@ def test_run_notify_resets_on_new_date(monkeypatch, _isolated_state, _isolated_s
 
 def test_run_notify_dry_run_does_not_write_state_or_call_discord(
         monkeypatch, _isolated_state, _isolated_setpoints):
-    from datetime import date
+    from datetime import date, datetime
     from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
     monkeypatch.setattr(weather, "get_forecast_3d",
-                         lambda: _forecast({h: 30.0 for h in range(24)}, date_str="20260703"))
+                         lambda: _forecast(ramp, date_str="20260703"))
     monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
     _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
 
@@ -444,7 +452,7 @@ def test_run_notify_dry_run_does_not_write_state_or_call_discord(
     called = []
     monkeypatch.setattr(notify, "send_discord", lambda embed: called.append(embed) or (True, "ok"))
 
-    n = live.run_notify(dry_run=True, today=date(2026, 7, 3))
+    n = live.run_notify(dry_run=True, today=date(2026, 7, 3), now=datetime(2026, 7, 3, 12, 0))
     assert n >= 1
     assert called == []            # 실제 discord 호출 없음
     assert not _isolated_state.exists()  # 상태 파일도 쓰지 않음
@@ -463,3 +471,85 @@ def test_run_notify_kma_unavailable_graceful(monkeypatch, _isolated_state, _isol
     assert n1 == 0     # 1회차 실패는 아직 이상 알림 안 보냄(연속 2회 임계치)
     n2 = live.run_notify(dry_run=False, today=date(2026, 7, 3))
     assert n2 == 1     # 2회 연속 실패 → 이상 알림 1건
+
+
+# ── 자정 연속성(이슈 #35) — initial_ctrl 시드 / 폴백 클램프 ───────────────
+def test_simulate_control_initial_ctrl_seeds_hour_zero_instead_of_baseline():
+    """initial_ctrl의 date가 정확히 어제면 0시 ctrl 시작값이 기준선이 아니라 시드에서
+    출발한다 — 밴드 밖(30.0) 기준선이어도 시드(21.0)를 그대로 이어받아야 함."""
+    from datetime import date as _dt
+    baseline = _baseline({h: (30.0, 70.0) for h in range(3)})  # 밴드 상한(25) 초과 기준선
+    states = default_states()
+    initial_ctrl = {"date": "2026-07-02", "hour": 23, "temp": 21.0, "hum": 65.0}  # 어제
+    timeline = live.simulate_control(baseline, _sp(), states, date=_dt(2026, 7, 3),
+                                      initial_ctrl=initial_ctrl)
+    assert timeline[0]["ctrl_temp"] == pytest.approx(21.0)
+    assert timeline[0]["ctrl_hum"] == pytest.approx(65.0)
+
+
+def test_simulate_control_initial_ctrl_today_date_is_ignored():
+    """last_ctrl의 date가 "오늘"(어제가 아님)이면 무효 — 같은 날 재호출 시 재시딩 방지
+    (run_notify 멱등성 회귀 방지)."""
+    from datetime import date as _dt
+    baseline = _baseline({h: (30.0, 70.0) for h in range(3)})
+    states = default_states()
+    today_seed = {"date": "2026-07-03", "hour": 12, "temp": 21.0, "hum": 65.0}
+    timeline = live.simulate_control(baseline, _sp(), states, date=_dt(2026, 7, 3),
+                                      initial_ctrl=today_seed)
+    assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)  # 기준선 그대로(시드 무시)
+
+
+def test_simulate_control_initial_ctrl_stale_date_is_ignored():
+    """last_ctrl의 date가 그제(2일 전) 이상이면 무효 — initial_ctrl 미사용(기존 거동)."""
+    from datetime import date as _dt
+    baseline = _baseline({h: (30.0, 70.0) for h in range(3)})
+    states = default_states()
+    stale = {"date": "2026-07-01", "hour": 23, "temp": 21.0, "hum": 65.0}
+    timeline = live.simulate_control(baseline, _sp(), states, date=_dt(2026, 7, 3),
+                                      initial_ctrl=stale)
+    assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)  # 기준선 그대로(시드 무시)
+
+
+def test_simulate_control_fallback_clamp_starts_within_band():
+    """initial_ctrl 없음 + fallback_clamp=True → 기준선이 밴드 밖(90%)이어도 0시 ctrl은
+    밴드 안(hum_low+deadband ~ hum_high-deadband)에서 시작한다."""
+    sp = _sp()
+    baseline = _baseline({h: (30.0, 90.0) for h in range(3)})  # 온·습도 모두 밴드 초과
+    states = default_states()
+    timeline = live.simulate_control(baseline, sp, states, date="2026-07-03",
+                                      initial_ctrl=None, fallback_clamp=True)
+    assert sp.temp_low + sp.temp_deadband - 1e-9 <= timeline[0]["ctrl_temp"] <= sp.temp_high - sp.temp_deadband + 1e-9
+    assert sp.hum_low + sp.hum_deadband - 1e-9 <= timeline[0]["ctrl_hum"] <= sp.hum_high - sp.hum_deadband + 1e-9
+
+
+def test_simulate_control_fallback_clamp_default_off_keeps_legacy_behavior():
+    """fallback_clamp 기본값(False)에서는 기존 거동(기준선 그대로 시작) 유지 — 무회귀."""
+    baseline = _baseline({h: (30.0, 90.0) for h in range(3)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)
+    assert timeline[0]["ctrl_hum"] == pytest.approx(90.0)
+
+
+def test_run_notify_persists_last_ctrl_and_preserves_dedup_fields(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """run_notify가 상태 파일에 last_ctrl을 기록하고, 기존 dedup 필드(devices·
+    emergency_hours)도 그대로 보존한다."""
+    from datetime import date
+    from llm import weather
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast({h: 30.0 for h in range(24)}, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    today = date(2026, 7, 3)
+    live.run_notify(dry_run=False, today=today)
+
+    state = json.loads(_isolated_state.read_text(encoding="utf-8"))
+    assert "last_ctrl" in state
+    assert state["last_ctrl"]["date"] == "2026-07-03"
+    assert state["last_ctrl"]["temp"] is not None
+    assert "devices" in state and "emergency_hours" in state  # 기존 dedup 필드 보존
