@@ -1,0 +1,33 @@
+"""
+session_state 키 상수 + 가상센서 헬퍼 — 이슈 #10 Streamlit 앱 전면 정리.
+
+네임스페이스 형식: "{페이지}.{용도}" (예: K_LAST_DIAG = "presc.last_diag").
+vsensor 생성 로직은 구 phase3_llm.py에서 문자 그대로 이관(리스크: 순서·조건 변경 금지).
+"""
+import streamlit as st
+
+# ── prescribe.py ──
+K_LAST_DIAG = "presc.last_diag"
+K_LAST_PRESC = "presc.last_presc"
+
+# ── monitor.py ──
+K_VSENSOR = "monitor.vsensor"
+K_LAST_WARNING = "monitor.last_warning"
+K_WEATHER_QA_ANSWER = "monitor.weather_qa_answer"
+
+
+def get_vsensor(year):
+    """연도별 VirtualSensor 인스턴스 확보(캐시 재사용) — 구 phase3의 vsensor 생성 로직 그대로 이관.
+
+    반환: (vs, error) — 실패 시 vs=None, error=예외 메시지 문자열.
+    """
+    from sim.virtual_sensor import VirtualSensor
+
+    vs = st.session_state.get(K_VSENSOR)
+    if vs is None or vs.year != year:
+        try:
+            vs = VirtualSensor(year)
+            st.session_state[K_VSENSOR] = vs
+        except ValueError as e:                 # 그 작기에 7일↑ 시계열 없음
+            return None, str(e)
+    return vs, None

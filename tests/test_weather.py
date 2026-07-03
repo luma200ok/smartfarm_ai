@@ -1,6 +1,8 @@
 """src/llm/weather.py — 기상청(KMA) API 클라이언트 (requests 모킹, 예외 전파 없음)."""
 from unittest.mock import MagicMock, patch
 
+import requests
+
 from llm import weather
 
 
@@ -227,6 +229,38 @@ def test_retry_fails_then_negative_cache_short_circuits(monkeypatch):
         r2 = weather.get_current(37.5665, 126.9780)        # 실패 캐시 TTL(60s) 내 재요청
         assert r2["unavailable"] is True
         assert m.call_count == 2                           # 추가 호출 없음(negative cache hit)
+
+
+def test_permanent_4xx_error_skips_retry(monkeypatch):
+    """401/403 등 영구(4xx) 오류는 재시도 없이 즉시 unavailable — 불필요 1.5s 지연 제거(이슈 #10 C6)."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    sleep_calls = []
+    monkeypatch.setattr(weather.time, "sleep", lambda *a: sleep_calls.append(a))
+
+    resp = MagicMock(status_code=401)
+    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+    with patch("requests.get", return_value=resp) as m:
+        r = weather.get_current(37.5665, 126.9780)
+
+    assert r["unavailable"] is True
+    assert m.call_count == 1              # 재시도 없음
+    assert sleep_calls == []              # sleep 호출 없음(즉시 포기)
+
+
+def test_429_rate_limit_still_retries(monkeypatch):
+    """429(레이트리밋)는 일시적 오류라 401/403과 달리 재시도해야 함(P1 회귀 픽스)."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    sleep_calls = []
+    monkeypatch.setattr(weather.time, "sleep", lambda *a: sleep_calls.append(a))
+
+    resp = MagicMock(status_code=429)
+    resp.raise_for_status.side_effect = requests.exceptions.HTTPError(response=resp)
+    with patch("requests.get", return_value=resp) as m:
+        r = weather.get_current(37.5665, 126.9780)
+
+    assert r["unavailable"] is True
+    assert m.call_count == 2              # 최초 시도 + 재시도 1회
+    assert len(sleep_calls) == 1          # sleep 1회 호출(재시도 대기)
 
 
 def test_clear_cache_also_clears_negative_cache(monkeypatch):

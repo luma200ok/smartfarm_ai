@@ -201,6 +201,18 @@ def _request(endpoint: str, params: dict) -> dict | None:
                 return None
             items = _normalize_items(body["response"]["body"]["items"]["item"])
             return {"items": items}
+        except requests.exceptions.HTTPError as e:
+            # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
+            _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
+            status = e.response.status_code if e.response is not None else None
+            if status is not None and 400 <= status < 500 and status != 429:
+                # 401/403/키 오류 등 영구(4xx) 오류는 재시도해도 결과가 같으므로 즉시 포기(불필요 지연 제거)
+                # 429(레이트리밋)는 일시적 오류이므로 재시도 대상으로 유지
+                return None
+            if attempt == 0:
+                time.sleep(_RETRY_DELAY)
+                continue
+            return None
         except Exception as e:
             # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
             _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
