@@ -498,8 +498,7 @@ def render_live_tab(setpoints):
 
     if emg:
         emg_done, emg_planned = _split_events(emg, now_hour)
-        if emg_done or emg_planned:
-            section("🚨 긴급/이상")
+        section("🚨 긴급/이상")
         for item in emg_done:
             alert_box("경고", f"{item['hour']:02d}시 — {item['reason']}")
         for item in emg_planned:

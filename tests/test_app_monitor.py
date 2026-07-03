@@ -93,6 +93,15 @@ def test_split_events_empty_list():
     assert done == [] and planned == []
 
 
+def test_split_events_now_hour_zero_midnight_boundary():
+    """경계: 자정 직후(now_hour=0)엔 hour 0만 실행, 1시 이후는 전부 예정(이슈 #31)."""
+    monitor_mod = _import_monitor_module()
+    items = [{"hour": 0}, {"hour": 1}, {"hour": 2}]
+    done, planned = monitor_mod._split_events(items, now_hour=0)
+    assert [i["hour"] for i in done] == [0]
+    assert [i["hour"] for i in planned] == [1, 2]
+
+
 def test_split_events_all_done_or_all_planned():
     monitor_mod = _import_monitor_module()
     items = [{"hour": 0}, {"hour": 1}]
