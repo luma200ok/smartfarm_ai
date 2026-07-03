@@ -66,3 +66,47 @@ def test_monitor_module_defines_datetime_symbol_used_by_render_live_tab():
     monitor_mod = importlib.import_module("monitor")
     import datetime as datetime_module
     assert monitor_mod.datetime is datetime_module.datetime
+
+
+def _import_monitor_module():
+    import importlib
+    import sys
+
+    for p in (ROOT / "app", ROOT / "app" / "views", ROOT / "src"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+    return importlib.import_module("monitor")
+
+
+def test_split_events_hour_equal_now_hour_is_done():
+    """경계: hour==now_hour는 실행(done) 쪽으로 분류된다(이슈 #31)."""
+    monitor_mod = _import_monitor_module()
+    items = [{"hour": 8}, {"hour": 9}, {"hour": 10}]
+    done, planned = monitor_mod._split_events(items, now_hour=9)
+    assert [i["hour"] for i in done] == [8, 9]
+    assert [i["hour"] for i in planned] == [10]
+
+
+def test_split_events_empty_list():
+    monitor_mod = _import_monitor_module()
+    done, planned = monitor_mod._split_events([], now_hour=9)
+    assert done == [] and planned == []
+
+
+def test_split_events_now_hour_zero_midnight_boundary():
+    """경계: 자정 직후(now_hour=0)엔 hour 0만 실행, 1시 이후는 전부 예정(이슈 #31)."""
+    monitor_mod = _import_monitor_module()
+    items = [{"hour": 0}, {"hour": 1}, {"hour": 2}]
+    done, planned = monitor_mod._split_events(items, now_hour=0)
+    assert [i["hour"] for i in done] == [0]
+    assert [i["hour"] for i in planned] == [1, 2]
+
+
+def test_split_events_all_done_or_all_planned():
+    monitor_mod = _import_monitor_module()
+    items = [{"hour": 0}, {"hour": 1}]
+    done, planned = monitor_mod._split_events(items, now_hour=23)
+    assert len(done) == 2 and planned == []
+
+    done2, planned2 = monitor_mod._split_events(items, now_hour=-1)
+    assert done2 == [] and len(planned2) == 2

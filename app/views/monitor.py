@@ -403,6 +403,15 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
     return (forecast_band + lines + bounds + now_rule).properties(height=280)
 
 
+def _split_events(items: list, now_hour: int) -> tuple:
+    """timeline 이벤트류(제어 이벤트 행 또는 긴급/이상 항목)를 now_hour 기준 실행분/예정분으로
+    분리한다(이슈 #31) — hour<=now_hour는 실행(done), hour>now_hour는 예정(planned).
+    items는 "hour" 키를 가진 dict의 리스트."""
+    done = [item for item in items if item["hour"] <= now_hour]
+    planned = [item for item in items if item["hour"] > now_hour]
+    return done, planned
+
+
 def render_live_tab(setpoints):
     """오늘(실제 날짜) 운영 탭(이슈 #23, 레이아웃 재배치 이슈 #25) — KMA 외기+기대값
     모델로 오늘 시간대별 제어 전/후 내부 온·습도 시뮬레이션(src/control/live.py, 규칙
@@ -469,19 +478,31 @@ def render_live_tab(setpoints):
             setpoints.hum_low, setpoints.hum_high, now_hour), use_container_width=True)
         st.caption("점선=지금 · 음영=지금 이후(기상청 예보 기반 예측)")
 
-    section("🧾 오늘 제어 이벤트")
-    events = [{"시간": f"{t['hour']:02d}시", "장치": DEVICE_LABEL_KR.get(log.device, log.device),
+    events = [{"hour": t["hour"], "시간": f"{t['hour']:02d}시",
+               "장치": DEVICE_LABEL_KR.get(log.device, log.device),
                "동작": log.action, "사유": log.reason}
               for t in timeline for log in t["events"]]
-    if events:
-        st.dataframe(events, hide_index=True, use_container_width=True)
+    events_done, events_planned = _split_events(events, now_hour)
+
+    section("🧾 오늘 제어 이벤트(실행)")
+    if events_done:
+        st.dataframe([{k: v for k, v in e.items() if k != "hour"} for e in events_done],
+                      hide_index=True, use_container_width=True)
     else:
-        st.caption("오늘 아직 제어 이벤트가 없어요.")
+        st.caption("아직 실행된 제어가 없어요.")
+
+    if events_planned:
+        section("🔮 예정된 제어(예보 기반)", "기상청 예보 기반 예상 — 매시 갱신되며 실제 실행과 다를 수 있어요")
+        st.dataframe([{k: v for k, v in e.items() if k != "hour"} for e in events_planned],
+                      hide_index=True, use_container_width=True)
 
     if emg:
+        emg_done, emg_planned = _split_events(emg, now_hour)
         section("🚨 긴급/이상")
-        for item in emg:
+        for item in emg_done:
             alert_box("경고", f"{item['hour']:02d}시 — {item['reason']}")
+        for item in emg_planned:
+            alert_box("주의", f"🔮 사전 경보(예보) {item['hour']:02d}시 — {item['reason']}")
 
     render_discord_settings()
 
