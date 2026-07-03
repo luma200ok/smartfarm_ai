@@ -191,10 +191,14 @@ def _write_final(messages: list, user_msg: str, image_path: str | None, diag: di
 
 
 def prescribe_fast(user_msg: str, image_path: str | None = None,
-                    on_progress: "Callable[[str], None] | None" = None) -> Prescription:
+                    on_progress: "Callable[[str], None] | None" = None,
+                    diag: dict | None = None) -> Prescription:
     """이슈 #18 — fast-path(1-call) 처방. tool 실행을 코드가 직행시키고 LLM은 최종 작성 1회만.
 
     처방 버튼 경로 전용(흐름 고정). CLI·비교 데모는 기존 prescribe()(agentic tool calling)를 유지.
+
+    diag(#18 P2 픽스) — 호출자가 표시용으로 이미 get_diagnosis를 실행해뒀다면 그 결과를 넘겨
+    재사용한다(DL 추론 2회 실행 방지). None이고 image_path가 있으면 기존대로 직접 호출한다.
     """
     def _progress(stage: str) -> None:
         if on_progress is None:
@@ -204,8 +208,9 @@ def prescribe_fast(user_msg: str, image_path: str | None = None,
         except Exception as e:
             _log.warning("on_progress 콜백 실패(%s) — 처방은 계속 진행: %s", stage, e)
 
-    diag = None
-    if image_path:
+    if diag is not None:
+        _progress("diagnosis")                            # 이미 완료된 단계 — 즉시 완료 표시만
+    elif image_path:
         _progress("diagnosis")
         try:
             diag = get_diagnosis(image_path)

@@ -323,6 +323,44 @@ def test_fast_diagnosis_failure_guards_no_assertion(monkeypatch):
     assert any("재시도" in m.get("content", "") for m in messages)
 
 
+def test_fast_reuses_given_diag_skips_get_diagnosis(monkeypatch):
+    """P2 픽스 — diag를 넘기면 get_diagnosis를 다시 호출하지 않는다(DL 추론 중복 실행 방지)."""
+    calls = {"n": 0}
+
+    def _diag(image_path):
+        calls["n"] += 1
+        return {"ood_blocked": False, "label": "leaf_mold", "prob": 0.9, "probs": {}, "part": "leaf"}
+
+    monkeypatch.setattr(prescribe, "get_diagnosis", _diag)
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])
+    monkeypatch.setattr(prescribe, "get_forecast",
+                        lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
+                                "humidity_mean": 90.0, "recent_temp": 29.0})
+    given_diag = {"ood_blocked": False, "label": "leaf_mold", "prob": 0.9, "probs": {}, "part": "leaf"}
+    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}):
+        p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg", diag=given_diag)
+    assert calls["n"] == 0
+    assert isinstance(p, Prescription)
+
+
+def test_fast_diag_none_keeps_existing_behavior(monkeypatch):
+    """diag 미전달(None)이면 기존대로 image_path로 get_diagnosis를 직접 호출한다."""
+    calls = {"n": 0}
+
+    def _diag(image_path):
+        calls["n"] += 1
+        return {"ood_blocked": False, "label": "leaf_mold", "prob": 0.9, "probs": {}, "part": "leaf"}
+
+    monkeypatch.setattr(prescribe, "get_diagnosis", _diag)
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])
+    monkeypatch.setattr(prescribe, "get_forecast",
+                        lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
+                                "humidity_mean": 90.0, "recent_temp": 29.0})
+    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}):
+        prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
+    assert calls["n"] == 1
+
+
 def test_fast_schema_violation_retries_then_falls_back():
     """스키마 위반 응답이 2회 연속이면 안전 폴백 Prescription을 반환한다."""
     bad = {"message": {"role": "assistant", "content": "not json"}}

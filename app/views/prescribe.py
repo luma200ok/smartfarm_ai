@@ -106,7 +106,8 @@ def render():
 
                     status.update(label=_STAGE_LABEL["diagnosis"])
                     st.session_state[K_LAST_PRESC] = prescribe_fast(
-                        question, image_path=image_path, on_progress=_on_progress)
+                        question, image_path=image_path, on_progress=_on_progress,
+                        diag=st.session_state[K_LAST_DIAG])  # 위에서 이미 실행한 진단 재사용(중복 추론 방지)
                     status.update(label="✅ 처방 완료", state="complete")
                 else:
                     st.session_state.pop(K_LAST_PRESC, None)
