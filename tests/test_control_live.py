@@ -93,10 +93,11 @@ def test_simulate_control_turns_on_device_when_over_band_and_moves_ctrl_toward_b
     baseline = _baseline({h: (30.0, 70.0) for h in range(5)})
     states = default_states()
     timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
-    assert timeline[0]["devices_on"] == [] or "cooling_fan" not in timeline[0]["devices_on"] or True
-    # 첫 시간엔 ctrl_temp==base_temp(기준선 그대로 시작), 이후 냉방 효과로 하락
+    # 첫 시간엔 ctrl_temp==base_temp(기준선 그대로 시작)이고, 온도가 밴드 상한을 넘으므로
+    # cooling_fan·vent가 즉시 ON 판정돼야 한다.
     assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)
     assert "cooling_fan" in timeline[0]["devices_on"]
+    assert "vent" in timeline[0]["devices_on"]
     later = timeline[-1]
     assert later["ctrl_temp"] < later["base_temp"]
 
@@ -173,6 +174,34 @@ def test_run_notify_sends_on_first_run_and_dedups_second_run(
 
     n2 = live.run_notify(dry_run=False, today=today)
     assert n2 == 0  # 같은 상태 재실행 — 전환 없음, 발송 0건
+
+
+def test_run_notify_uses_current_hour_not_timeline_end_for_transitions(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """P1-2 회귀 방지 — 현재 시각(now.hour)에는 밴드 내(장치 OFF)인데 미래 시간대만
+    밴드 초과(장치 ON)인 프로파일. 픽스 전엔 timeline 마지막(미래) 상태를 "지금 전환"으로
+    오인해 cooling_fan ON 알림을 보냈지만, 픽스 후엔 현재 시각 기준 OFF라 발송 0건이어야 한다."""
+    from datetime import date, datetime
+    from llm import weather
+
+    # 09시(현재로 고정)는 밴드 내(22℃), 10시 이후만 밴드 초과(30℃) — 미래에만 장치가 켜짐.
+    hours_temp = {h: (22.0 if h <= 9 else 30.0) for h in range(24)}
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(hours_temp, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    today = date(2026, 7, 3)
+    now = datetime(2026, 7, 3, 9, 0)   # 09시 = 아직 밴드 내(장치 OFF)여야 하는 "지금"
+    live.run_notify(dry_run=False, today=today, now=now)
+    # 미래(10시 이후) 밴드 초과로 인한 긴급 알림은 별개로 발송될 수 있지만, "장치 전환"
+    # 알림(🎛)은 지금(09시) 기준으로는 없어야 한다 — 픽스 전엔 timeline 마지막(미래, 30℃
+    # 지속)의 cooling_fan ON을 "지금 전환"으로 오인해 이 임베드가 섞여 들어갔다.
+    device_transition_embeds = [e for e in sent if e["title"].startswith("🎛")]
+    assert device_transition_embeds == []
 
 
 def test_run_notify_resets_on_new_date(monkeypatch, _isolated_state, _isolated_setpoints):

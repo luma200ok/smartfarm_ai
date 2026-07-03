@@ -9,6 +9,7 @@
 리플레이 시뮬레이션은 "🧪 시뮬레이션" 탭으로 그대로 이동(로직 변경 없음).
 """
 from datetime import date as _date
+from datetime import datetime
 from pathlib import Path
 import sys
 

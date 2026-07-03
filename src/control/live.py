@@ -180,19 +180,27 @@ def emergency_hours(timeline: "list[dict]", setpoints) -> "list[dict]":
         devices_on = set(item["devices_on"])
         if temp is not None:
             if temp > setpoints.temp_high and {"cooling_fan", "vent"} <= devices_on:
-                out.append({"hour": item["hour"],
+                out.append({"hour": item["hour"], "kind": "temp_high",
                             "reason": f"제어 한계 초과 — 냉방·환기 풀가동에도 고온 지속({temp:.1f}℃)"})
             elif temp < setpoints.temp_low and "heater" in devices_on:
-                out.append({"hour": item["hour"],
+                out.append({"hour": item["hour"], "kind": "temp_low",
                             "reason": f"제어 한계 초과 — 난방 풀가동에도 저온 지속({temp:.1f}℃)"})
         if hum is not None:
             if hum > setpoints.hum_high and "vent" in devices_on:
-                out.append({"hour": item["hour"],
+                out.append({"hour": item["hour"], "kind": "hum_high",
                             "reason": f"제어 한계 초과 — 환기 풀가동에도 고습 지속({hum:.1f}%)"})
             elif hum < setpoints.hum_low and "humidifier" in devices_on:
-                out.append({"hour": item["hour"],
+                out.append({"hour": item["hour"], "kind": "hum_low",
                             "reason": f"제어 한계 초과 — 가습 풀가동에도 저습 지속({hum:.1f}%)"})
     return out
+
+
+def _emergency_key(item: dict) -> str:
+    """긴급 dedup 키 — hour만으로 묶으면 같은 시간대에 다른 사유(예: 고온→고습)가 잇달아
+    발생해도 먼저 잡힌 사유가 나머지를 영구 억제한다(P2-2). kind(사유 요약, 안정적 카테고리)를
+    함께 넣어 구분한다 — reason 원문은 온도·습도 수치가 매번 미세하게 달라 그대로 키로 쓰면
+    dedup이 사실상 무력화되므로 사용하지 않는다."""
+    return f"{item['hour']}:{item['kind']}"
 
 
 # ── 상태 파일 (data/control_live_state.json) — 세션이 아닌 파일 기반 dedup ──────────
@@ -239,9 +247,14 @@ def _kma_unavailable_embed(reason: str, date_str: str) -> dict:
                        {"name": "사유", "value": reason}]}
 
 
-def run_notify(dry_run: bool = False, today: "_date | None" = None) -> int:
+def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "datetime | None" = None) -> int:
     """타이머 진입점(1시간마다 호출 가정) — 현재 시각 판정 → 직전 상태 파일과 비교해
     전환분만 디스코드로 발송(①장치 ON/OFF 전환 ②KMA 연속 실패 이상 ③긴급).
+
+    장치 전환 판정은 timeline의 "지금"(hour==now.hour, 없으면 timeline 마지막) 항목
+    기준이다 — render_live_tab()과 동일한 기준(P1-2: 타임라인 끝=미래 예보 기반 상태를
+    "지금 전환"으로 오인해 발송하던 버그 수정).
+    now 는 테스트 주입용(기본: 현재 시각).
 
     dry_run=True면 실제 발송 대신 stdout에 embed를 출력(로컬 수동 확인용).
     날짜가 바뀌면 상태가 자연히 리셋된다(전날 devices/emergency_hours를 베이스로 쓰지 않음).
@@ -284,16 +297,23 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None) -> int:
     timeline = simulate_control(baseline, sp, states, date=today)
     emg = emergency_hours(timeline, sp)
 
+    # 장치 전환 판정은 타임라인 마지막(=미래 예보 기반 마지막 시간) states가 아니라 "지금"에
+    # 해당하는 시간대 항목 기준이어야 한다(P1-2) — render_live_tab()과 동일한 기준(hour==현재
+    # 시각, 없으면 timeline 마지막)을 사용해 UI와 알림이 같은 "지금" 상태를 보게 맞춘다.
+    now_hour = (now or datetime.now()).hour
+    cur_item = next((t for t in timeline if t["hour"] == now_hour), timeline[-1] if timeline else None)
+    cur_devices_on = set(cur_item["devices_on"]) if cur_item else set()
+    cur_devices = {d: (d in cur_devices_on) for d in default_states()}
+
     prev_devices = prev_state.get("devices", {}) if same_day else {}
-    cur_devices = {d: s.on for d, s in states.items()}
     transitions = {d: on for d, on in cur_devices.items() if prev_devices.get(d, False) != on}
     if transitions:
         if _emit(_device_embed(transitions, date_str)):
             sent += 1
 
     prev_emg_keys = set(prev_state.get("emergency_hours", [])) if same_day else set()
-    cur_emg_keys = {str(item["hour"]) for item in emg}
-    new_emg = [item for item in emg if str(item["hour"]) not in prev_emg_keys]
+    cur_emg_keys = {_emergency_key(item) for item in emg}
+    new_emg = [item for item in emg if _emergency_key(item) not in prev_emg_keys]
     for item in new_emg:
         if _emit(_emergency_embed(item, date_str)):
             sent += 1
