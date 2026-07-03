@@ -9,6 +9,7 @@ ipykernel
 
 # Streamlit 데모 (멀티페이지 st.navigation 사용 → 1.36+ 필수)
 streamlit>=1.40
+altair>=5.0,<6           # app/views/monitor.py 오늘 운영 추이 차트(이슈 #25) — streamlit 전이 의존성에 우연히 의존 중이던 것을 명시
 
 # 노트북 빌드·실행 (src/ml/build_notebook.py)
 nbformat
