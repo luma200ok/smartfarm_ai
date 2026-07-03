@@ -1,4 +1,8 @@
-"""규칙 기반 자동 제어 판정 — decide()·emergency() 순수 함수(LLM 호출 없음)."""
+"""규칙 기반 자동 제어 판정 — decide()·emergency() 순수 함수(LLM 호출 없음).
+
+이슈 #27 — 환기(vent) 제거·제습기(dehumidifier) 신설로 온도(히터/쿨링팬)·습도
+(가습기/제습기) 각 2종 전용 장치 구조로 단순화. 습도 장치가 온도 규칙과 더 이상
+공유되지 않아 이슈 #17 P2-2의 cause 오염 방지 로직은 불필요해져 제거했다."""
 from .actuators import ControlLog, DeviceState
 
 
@@ -24,7 +28,8 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     """센서값+설정 밴드+현재 장치 상태 → 상태 변화(states 갱신) + 발생한 ControlLog 목록.
 
     수동(auto=False) 장치는 결정 대상에서 제외(현재 상태 그대로 유지, 로그 없음).
-    heater/cooling_fan 동시 ON 금지 — 충돌 시 이탈 폭이 큰 쪽 우선.
+    heater/cooling_fan 동시 ON 금지, humidifier/dehumidifier 동시 ON 금지 —
+    충돌 시 이탈 폭이 큰 쪽 우선(온도·습도는 서로 다른 밴드라 실제로는 발생하지 않음).
     """
     temp = reading.get("온도내부_평균", (setpoints.temp_low + setpoints.temp_high) / 2)
     hum = reading.get("습도내부_평균", (setpoints.hum_low + setpoints.hum_high) / 2)
@@ -33,15 +38,10 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     def cur_on(device: str) -> bool:
         return states[device].on
 
-    # vent는 온도·습도 두 규칙이 공유하는 장치라, 습도측 히스테리시스(was_high)는 vent가
-    # "습도 사유"로 켜져 있을 때만 인정한다 — 온도 사유로 켜진 vent를 습도 데드밴드 유지로
-    # 오인하지 않도록(이슈 #17 P2-2).
-    vent_was_high_hum = cur_on("vent") and states["vent"].cause == "hum"
-
     temp_state = _band_state(temp, setpoints.temp_low, setpoints.temp_high,
                               setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
     hum_state = _band_state(hum, setpoints.hum_low, setpoints.hum_high,
-                             setpoints.hum_deadband, vent_was_high_hum, cur_on("humidifier"))
+                             setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
 
     want_cooling = temp_state == "high"
     want_heater = temp_state == "low"
@@ -51,32 +51,21 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
         else:
             want_cooling = False
 
-    # vent: 온도 상한 초과 시 강제 ON, 온도 하한 미달 시 강제 OFF(스펙 명시),
-    # 온도가 정상이면 습도 판정에 위임.
-    if temp_state == "high":
-        want_vent, vent_cause = True, "temp"
-        vent_reason = f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃) — 환기 가동"
-    elif temp_state == "low":
-        want_vent, vent_cause = False, None
-        vent_reason = "온도 하한 미달 — 난방 우선(환기 정지)"
-    else:
-        want_vent = hum_state == "high"
-        vent_cause = "hum" if want_vent else None
-        vent_reason = (f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%) — 환기 가동"
-                        if want_vent else "밴드 정상 범위 복귀")
-
+    want_dehumidifier = hum_state == "high"
     want_humidifier = hum_state == "low"
+    if want_dehumidifier and want_humidifier:  # 이론상 low<high면 불가하지만 방어적으로 처리
+        if (hum - setpoints.hum_high) >= (setpoints.hum_low - hum):
+            want_humidifier = False
+        else:
+            want_dehumidifier = False
 
-    def _apply(device: str, want: bool, reason: str, cause: str | None = None):
+    def _apply(device: str, want: bool, reason: str):
         state = states[device]
         if not state.auto:
             return
         if state.on == want:
-            if want:  # 지속 ON — cause만 최신화(온도↔습도 전환 대비)
-                state.cause = cause
             return
         state.on = want
-        state.cause = cause if want else None
         logs.append(ControlLog(date=str(date), device=device, action="ON" if want else "OFF",
                                 reason=reason, mode="auto"))
 
@@ -86,7 +75,9 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     _apply("heater", want_heater,
            f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)" if want_heater
            else "밴드 정상 범위 복귀")
-    _apply("vent", want_vent, vent_reason, cause=vent_cause)
+    _apply("dehumidifier", want_dehumidifier,
+           f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%)" if want_dehumidifier
+           else "밴드 정상 범위 복귀")
     _apply("humidifier", want_humidifier,
            f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)" if want_humidifier
            else "밴드 정상 범위 복귀")
@@ -110,15 +101,15 @@ def _emergency_candidates(recent_readings: list[dict], setpoints,
 
     candidates = []
     if all(t is not None and t > setpoints.temp_high for t in temps) \
-            and states["cooling_fan"].on and states["vent"].on:
+            and states["cooling_fan"].on:
         candidates.append({"key": "control_limit:temp_high", "level": "경고",
-                            "reason": "제어 한계 초과 — 설비 점검 필요(냉방·환기 풀가동에도 고온 지속)"})
+                            "reason": "제어 한계 초과 — 설비 점검 필요(냉방 풀가동에도 고온 지속)"})
     if all(t is not None and t < setpoints.temp_low for t in temps) and states["heater"].on:
         candidates.append({"key": "control_limit:temp_low", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(난방 풀가동에도 저온 지속)"})
-    if all(h is not None and h > setpoints.hum_high for h in hums) and states["vent"].on:
+    if all(h is not None and h > setpoints.hum_high for h in hums) and states["dehumidifier"].on:
         candidates.append({"key": "control_limit:hum_high", "level": "경고",
-                            "reason": "제어 한계 초과 — 설비 점검 필요(환기 풀가동에도 고습 지속)"})
+                            "reason": "제어 한계 초과 — 설비 점검 필요(제습기 풀가동에도 고습 지속)"})
     if all(h is not None and h < setpoints.hum_low for h in hums) and states["humidifier"].on:
         candidates.append({"key": "control_limit:hum_low", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(가습 풀가동에도 저습 지속)"})
