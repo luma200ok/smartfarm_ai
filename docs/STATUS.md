@@ -41,6 +41,7 @@
 - [x] **날씨 인지 2·3단계 통합**(이슈 #6 클로즈): 외기→실내 기대값 회귀 + 원인 구분·equip_anom·feedforward + 시나리오 데모 + diseases 병해군(#2 흡수) (PR #12·#13)
 - [x] **Streamlit 앱 전면 정리**(이슈 #10 클로즈): app/views/ 분해·서비스형 네비·신규 대시보드·문구 통일 + weather 4xx 재시도 후속(PR #11 P2) (PR #14)
 - [x] **처방 지연 개선**(이슈 #15 클로즈): tool 라운드 num_predict 캡·keep_alive 30m·프롬프트 -17~20%·st.status 진행 표시 — 로컬 웜 28→17~19s(-35%), OCI CPU 추론 부담 완화 (PR #16)
+- [x] **처방 fast-path 전환**(이슈 #18 클로즈): 진단·RAG·예보 코드 직행 + LLM 최종 JSON 1-call + writer 모델 분리(`OLLAMA_WRITER_MODEL`, 서버=exaone3.5:2.4b) — **서버 342.6→웜 16.2s(-95%)**, 로컬 10~15s. agentic prescribe()는 CLI·Q&A 유지 (PR #19)
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
 - [ ] 진단 병해 클래스 확장 2차: 흰가루·잿빛(데이터 수집 필요).
 - [ ] 실센서/스프링 서버 sensor API를 `monitor.py`·가상센서 소스로 어댑터 연결
