@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-02** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-03** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -22,7 +22,7 @@
 | ➕ 날씨 | `src/llm/weather.py`·`tools.py`(get_weather)·`pipeline.py`(weather_qa) | 기상청 단기예보 API — 외기 실황·3일 예보 + 날씨 Q&A(앱 외부날씨 섹션). PR #9·#11, 이슈 #6 1단계 |
 | ➕ 기대값 | `src/ml/train_expect.py`·`src/llm/expect.py`·`monitor.py`(cause·equip_anom·feedforward)·`sim/virtual_sensor.py`(inject) | 외기→실내 기대값 회귀(XGB MAE 1.11/1.44℃) — 원인 구분 경보·조기 감지·사전 경보·시나리오 데모. PR #12·#13, 이슈 #6 완결(+#2 흡수) |
 
-앱: `streamlit run app/streamlit_app.py` → Phase 1/2/3 멀티페이지. 진단·처방·근거·가상센서·코치·경보·전송 버튼.
+앱: `streamlit run app/streamlit_app.py` → **서비스형 2그룹 네비**([서비스] 농장 대시보드·잎 병해 진단·AI 처방·환경 모니터링·작물 환경 추천 / [프로젝트 기록] 개요·성과, ML/DL 실험 기록). `app/views/` 8페이지 + 공통 `ui.py`·`state.py`·`nav.py`·`.streamlit/config.toml` 테마 (이슈 #10, PR #14).
 
 ## 🖥 인프라 · 로컬 전제
 | 항목 | 값 |
@@ -39,7 +39,7 @@
 ## 📌 다음 작업 (백로그 — roadmap "향후 확장" 참조)
 - [x] **날씨 인지 1단계**(이슈 #6): 기상청 API + get_weather + 날씨 Q&A + 앱 외기 데모 (PR #9·#11)
 - [x] **날씨 인지 2·3단계 통합**(이슈 #6 클로즈): 외기→실내 기대값 회귀 + 원인 구분·equip_anom·feedforward + 시나리오 데모 + diseases 병해군(#2 흡수) (PR #12·#13)
-- [ ] Streamlit 앱 전면 정리 (이슈 #10 — phase3_llm.py 분리·문구·오류 표시 통일, +PR #11 P2 후속)
+- [x] **Streamlit 앱 전면 정리**(이슈 #10 클로즈): app/views/ 분해·서비스형 네비·신규 대시보드·문구 통일 + weather 4xx 재시도 후속(PR #11 P2) (PR #14)
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
 - [ ] 진단 병해 클래스 확장 2차: 흰가루·잿빛(데이터 수집 필요).
 - [ ] 실센서/스프링 서버 sensor API를 `monitor.py`·가상센서 소스로 어댑터 연결
