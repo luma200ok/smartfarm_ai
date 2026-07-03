@@ -81,33 +81,76 @@ def test_hysteresis_cooling_turns_off_after_deadband_recovery():
 
 # ── 습도 밴드 중앙 목표 OFF 판정(이슈 #33) ───────────────────────────────
 def test_hum_dehumidifier_stays_on_until_mid_reached():
-    """제습기 ON 후 밴드 안(85% 아래)이어도 중앙(72.5%)에서 데드밴드(2.0) 밖이면 유지."""
+    """hum_mode="center"(live 경로 전용, 이슈 #33) — 제습기 ON 후 밴드 안(85% 아래)이어도
+    중앙(72.5%)에서 데드밴드(2.0) 밖이면 유지."""
     states = default_states()
-    decide(_reading(hum=90.0), _sp(), states, date="d1")
+    decide(_reading(hum=90.0), _sp(), states, date="d1", hum_mode="center")
     assert states["dehumidifier"].on is True
-    logs = decide(_reading(hum=80.0), _sp(), states, date="d2")  # 밴드 안, 중앙과 거리 7.5 > 2.0
+    logs = decide(_reading(hum=80.0), _sp(), states, date="d2", hum_mode="center")  # 밴드 안, 중앙과 거리 7.5 > 2.0
     assert states["dehumidifier"].on is True
     assert logs == []
 
 
 def test_hum_dehumidifier_turns_off_near_mid():
-    """중앙(72.5%) 데드밴드(2.0) 이내로 들어오면 OFF."""
+    """hum_mode="center" — 중앙(72.5%) 데드밴드(2.0) 이내로 들어오면 OFF."""
     states = default_states()
-    decide(_reading(hum=90.0), _sp(), states, date="d1")
+    decide(_reading(hum=90.0), _sp(), states, date="d1", hum_mode="center")
     assert states["dehumidifier"].on is True
-    logs = decide(_reading(hum=73.0), _sp(), states, date="d2")  # |73-72.5|=0.5 <= 2.0
+    logs = decide(_reading(hum=73.0), _sp(), states, date="d2", hum_mode="center")  # |73-72.5|=0.5 <= 2.0
     assert states["dehumidifier"].on is False
     assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs)
 
 
 def test_hum_humidifier_turns_off_near_mid_symmetric():
-    """가습기도 동일 — 중앙 근접 시 OFF(저습 대칭)."""
+    """hum_mode="center" — 가습기도 동일. 중앙 근접 시 OFF(저습 대칭)."""
     states = default_states()
-    decide(_reading(hum=50.0), _sp(), states, date="d1")
+    decide(_reading(hum=50.0), _sp(), states, date="d1", hum_mode="center")
     assert states["humidifier"].on is True
-    logs = decide(_reading(hum=72.0), _sp(), states, date="d2")  # |72-72.5|=0.5 <= 2.0
+    logs = decide(_reading(hum=72.0), _sp(), states, date="d2", hum_mode="center")  # |72-72.5|=0.5 <= 2.0
     assert states["humidifier"].on is False
     assert any(log.device == "humidifier" and log.action == "OFF" for log in logs)
+
+
+def test_hum_edge_mode_is_default_and_matches_temp_hysteresis():
+    """hum_mode 기본값(edge)은 온도와 동일한 경계 히스테리시스(_band_state)를 쓴다 —
+    리플레이(app/views/monitor.py._run_control_step)는 이 기본값을 그대로 사용해야 하므로
+    회귀 방지용으로 명시 검증(이슈 #33 리뷰 P1 픽스)."""
+    states = default_states()
+    decide(_reading(hum=90.0), _sp(), states, date="d1")  # hum_mode 미지정
+    assert states["dehumidifier"].on is True
+    # 밴드 안(85% 아래)이라도 경계 히스테리시스 창(high-deadband=83.0) 안쪽까지 와야 OFF —
+    # 중앙(72.5%)까지 갈 필요 없음(edge≠center 확인).
+    logs = decide(_reading(hum=84.0), _sp(), states, date="d2")  # 83.0보다 큼 → 유지
+    assert states["dehumidifier"].on is True
+    assert logs == []
+    logs2 = decide(_reading(hum=82.0), _sp(), states, date="d3")  # 83.0보다 작음 → OFF
+    assert states["dehumidifier"].on is False
+    assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs2)
+
+
+# ── 리플레이(edge 모드) + EFFECTS_DAILY 고정 스텝 회귀(이슈 #33 리뷰 P1 픽스) ────────
+def test_replay_edge_mode_humidifier_no_overshoot_with_daily_step():
+    """리뷰어 재현 시나리오 — 초기 55%(밴드 60~85% 하한 미달)에서 decide(hum_mode="edge",
+    기본값)+EFFECTS_DAILY 고정 스텝(+5.0%p)을 반복 적용해도, 가습기가 밴드 상한(85%)을
+    관통하지 않고 경계 히스테리시스(하한+deadband=62.0) 안쪽에서 OFF돼야 한다."""
+    from control.effects import EFFECTS_DAILY
+
+    sp = _sp()
+    states = default_states()
+    hum = 55.0
+    max_hum_seen = hum
+
+    for step in range(10):
+        logs = decide(_reading(hum=hum), sp, states, date=f"d{step}")  # hum_mode 미지정=edge
+        if states["humidifier"].on:
+            hum += EFFECTS_DAILY["humidifier"]["습도내부_평균"]  # +5.0%p 고정 스텝
+        max_hum_seen = max(max_hum_seen, hum)
+        if not states["humidifier"].on and step > 0:
+            break
+
+    assert states["humidifier"].on is False
+    assert states["dehumidifier"].on is False  # 반대쪽 밴드까지 관통해 제습기가 켜지지 않음
+    assert max_hum_seen <= sp.hum_high  # 밴드 상한(85%) 관통 없음(회귀 재현 시 90%까지 관통했었음)
 
 
 # ── 수동 오버라이드 제외 ────────────────────────────────────────────────

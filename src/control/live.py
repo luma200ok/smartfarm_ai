@@ -179,7 +179,11 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
             ctrl_hum = item["base_hum"]
 
         reading = {"온도내부_평균": ctrl_temp, "습도내부_평균": ctrl_hum}
-        logs = controller.decide(reading, setpoints, states, date=f"{date} {item['hour']:02d}:00")
+        # hum_mode="center" — P-제어(델타가 hum_mid로 비례 수렴)에 맞춰 OFF 판정도 중앙
+        # 근접 기준을 명시(리뷰 P1 픽스, 이슈 #33) — 리플레이(app/views/monitor.py)는
+        # decide() 기본값(edge, 경계 히스테리시스)을 그대로 사용.
+        logs = controller.decide(reading, setpoints, states, date=f"{date} {item['hour']:02d}:00",
+                                  hum_mode="center")
         devices_on = [d for d in states if states[d].on]
 
         timeline.append({

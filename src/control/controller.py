@@ -42,12 +42,22 @@ def _hum_band_state(value: float, low: float, high: float, deadband: float,
     return "normal"
 
 
-def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) -> list[ControlLog]:
+def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
+           hum_mode: str = "edge") -> list[ControlLog]:
     """센서값+설정 밴드+현재 장치 상태 → 상태 변화(states 갱신) + 발생한 ControlLog 목록.
 
     수동(auto=False) 장치는 결정 대상에서 제외(현재 상태 그대로 유지, 로그 없음).
     heater/cooling_fan 동시 ON 금지, humidifier/dehumidifier 동시 ON 금지 —
     충돌 시 이탈 폭이 큰 쪽 우선(온도·습도는 서로 다른 밴드라 실제로는 발생하지 않음).
+
+    hum_mode(이슈 #33 리뷰 P1 픽스) — 습도 판정 방식 선택:
+    - "edge"(기본, 하위호환) — 경계 히스테리시스(_band_state, 온도와 동일 패턴). 리플레이
+      (시뮬레이션 탭, app/views/monitor.py._run_control_step)는 EFFECTS_DAILY(1일 고정
+      ±5%p) 스텝이라, 중앙(mid) OFF 창을 큰 스텝으로 건너뛰면 반대쪽 밴드까지 관통하는
+      회귀가 있어 반드시 이 모드를 써야 한다.
+    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state). live(오늘 운영,
+      control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해 비례 수렴)라
+      이 모드를 명시적으로 사용한다.
     """
     temp = reading.get("온도내부_평균", (setpoints.temp_low + setpoints.temp_high) / 2)
     hum = reading.get("습도내부_평균", (setpoints.hum_low + setpoints.hum_high) / 2)
@@ -58,8 +68,9 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
 
     temp_state = _band_state(temp, setpoints.temp_low, setpoints.temp_high,
                               setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
-    hum_state = _hum_band_state(hum, setpoints.hum_low, setpoints.hum_high,
-                                 setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
+    hum_band_fn = _hum_band_state if hum_mode == "center" else _band_state
+    hum_state = hum_band_fn(hum, setpoints.hum_low, setpoints.hum_high,
+                             setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
 
     want_cooling = temp_state == "high"
     want_heater = temp_state == "low"
