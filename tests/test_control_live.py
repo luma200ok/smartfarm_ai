@@ -188,18 +188,38 @@ def test_state_file_vent_key_backward_compat(monkeypatch, _isolated_state, _isol
     assert set(state["devices"]) == {"dehumidifier", "humidifier", "cooling_fan", "heater"}
 
 
-def test_simulate_control_no_chattering_at_boundary():
-    # 이슈 #27로 효과가 시간당 상수(냉방 -2.0℃/h)로 커져, 매 시간 26.6℃가 유입되면 냉방
-    # 효과 반영 후 ctrl_temp가 24.6℃(데드밴드 24.5 안쪽 경계 바로 위)에서 안정된다 —
-    # 밴드 상한(25.0) 자체는 넘지 않아도 히스테리시스로 계속 ON 유지돼야(채터링 없음).
-    baseline = _baseline({0: (30.0, 70.0), 1: (26.6, 70.0), 2: (26.6, 70.0), 3: (26.6, 70.0)})
+def test_simulate_control_no_chattering_with_variable_baseline():
+    """리뷰 P2-1 픽스 검증 — 가변 외기(밴드 경계 부근에서 ±1~1.5℃ 흔들림)에서도 제어
+    관성(누적) 방식 + 히스테리시스로 장치 ON/OFF 전환 횟수가 임계(3회) 이하여야 한다."""
+    base = 25.3  # 밴드 상한(25.0) 바로 위 — 경계 부근
+    swing = [1.5, -1.2, 1.3, -1.0, 1.4, -1.1, 1.2, -1.3, 1.1, -1.4]
+    hours_temp = {}
+    v = base
+    for h, s in enumerate(swing):
+        v = base + s
+        hours_temp[h] = v
+    baseline = _baseline({h: (t, 70.0) for h, t in hours_temp.items()})
     states = default_states()
     timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
     on_flags = ["cooling_fan" in t["devices_on"] for t in timeline]
-    assert on_flags == [True, True, True, True]
-    # ctrl_temp가 데드밴드 안쪽(24.5)~상한(25.0) 사이에서 안정되는지 확인(발산하지 않음).
-    for item in timeline[1:]:
-        assert item["ctrl_temp"] == pytest.approx(24.6)
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 3
+
+
+def test_simulate_control_no_single_step_penetration_temp():
+    """리뷰 P2-1 픽스 검증 — 고온 시작(냉방 ON) 후 외기가 급락해도 한 스텝에 temp_low
+    아래로 관통해 heater가 즉시 켜지는 교대 진동이 없어야 한다(관통 방지 클램프)."""
+    # 45℃(냉방 ON 유발) → 다음 시간 -10℃로 급락(관통 시도).
+    baseline = _baseline({0: (45.0, 70.0), 1: (-10.0, 70.0), 2: (-10.0, 70.0)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    assert "cooling_fan" in timeline[0]["devices_on"]
+    # 1시간 뒤(관통 방지 클램프 적용된 ctrl_temp) 값 자체가 temp_low+deadband 아래로
+    # 내려가지 않아야 하고, heater가 같은 스텝에서 곧바로 ON 되지 않아야 한다.
+    sp = _sp()
+    assert timeline[1]["ctrl_temp"] >= sp.temp_low + sp.temp_deadband - 1e-9
+    assert "heater" not in timeline[1]["devices_on"]
 
 
 def test_simulate_control_deterministic_when_states_deepcopied_between_calls():
@@ -233,7 +253,10 @@ def test_simulate_control_without_deepcopy_drifts_across_calls():
     """대조군 — deepcopy 없이 같은 states 객체를 재사용하면(수정 전 버그) 직전 호출이 장치를
     ON으로 남긴 채 끝난 뒤, 그 상태를 이어받아 재실행하면 히스테리시스 데드밴드 때문에
     "0시부터 밴드 정상 범위"인 새 타임라인의 첫 시간조차 잘못 ON으로 판정된다."""
-    hot_baseline = _baseline({h: (30.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
+    # 이슈 #27(제어 관성 방식) — 냉방 효과(-2.0℃/h)가 누적되므로 30℃로는 6시간 안에 밴드로
+    # 수렴해버려 fan이 자연히 OFF된다. 시종일관 ON 상태를 유지시키려면 충분히 높은 기준선(45℃)
+    # 이 필요하다(6시간 동안 2℃/h씩 내려가도 35℃로 여전히 밴드 상한 초과).
+    hot_baseline = _baseline({h: (45.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
     normal_baseline = _baseline({h: (24.7, 70.0) for h in range(3)})  # 데드밴드(24.5) 안쪽, 밴드 자체는 정상
 
     states_fresh = default_states()
