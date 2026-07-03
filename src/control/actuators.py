@@ -16,15 +16,10 @@ DEVICE_LABEL_KR = {
 
 @dataclass
 class DeviceState:
-    """장치 1개의 현재 상태 — on(ON/OFF)·auto(자동/수동 모드).
-
-    cause: 현재 ON 상태를 유발한 판정 출처("temp"|"hum"|None) — 이슈 #27로 습도 장치가
-    dehumidifier/humidifier 전용이 되면서 더 이상 두 규칙을 공유하지 않지만, ControlLog와
-    동일한 필드 형태를 유지하기 위해 남겨둔다."""
+    """장치 1개의 현재 상태 — on(ON/OFF)·auto(자동/수동 모드)."""
 
     on: bool = False
     auto: bool = True
-    cause: str | None = None
 
 
 @dataclass
