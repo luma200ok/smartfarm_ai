@@ -24,6 +24,7 @@ K_CONTROL_LAST_DATE = "monitor.control_last_date"
 K_RECENT_READINGS = "monitor.recent_readings"
 K_DISCORD_CONTROL_TOGGLE = "monitor.discord_control_toggle"
 K_CONTROL_YEAR = "monitor.control_year"   # 연도별 제어 상태 리셋 판단용(이슈 #17 P2-1)
+K_LIVE_DEVICE_STATES = "monitor.live_device_states"  # 오늘 운영 탭 전용 장치 상태(이슈 #25) — 시뮬용(K_DEVICE_STATES)과 분리
 
 
 def get_vsensor(year):
