@@ -370,6 +370,15 @@ def _emergency_embed(hour_item: dict, date_str: str) -> dict:
                        {"name": "사유", "value": hour_item["reason"]}]}
 
 
+def _forecast_alert_embed(hour_items: "list[dict]", date_str: str) -> dict:
+    """미래 시간대 사전 경보(이슈 #38 A안) — 여러 시간대를 1건 embed로 요약해 스팸을
+    줄인다. hour_items는 hour 오름차순으로 넘겨야 fields 순서가 시간순이 된다."""
+    fields = [{"name": f"{date_str} {item['hour']:02d}시", "value": item["reason"]}
+              for item in hour_items]
+    return {"title": "🔮 오늘 운영 — 사전 경보(예보 기반 예상)", "color": 15105642,
+            "fields": fields}
+
+
 def _kma_unavailable_embed(reason: str, date_str: str) -> dict:
     return {"title": "⚠️ 오늘 운영 — KMA 조회 실패", "color": 15105570,
             "fields": [{"name": "일시", "value": date_str, "inline": True},
@@ -446,10 +455,23 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
             sent += 1
 
     prev_emg_keys = set(prev_state.get("emergency_hours", [])) if same_day else set()
+    # cur_emg_keys는 emg 전체(현재/미래/과거 불문)로 만든다 — 과거 시간대는 발송하지
+    # 않아도 상태 키에는 남겨야 재발송(뒷북)을 막을 수 있다(이슈 #38 A안).
     cur_emg_keys = {_emergency_key(item) for item in emg}
     new_emg = [item for item in emg if _emergency_key(item) not in prev_emg_keys]
-    for item in new_emg:
+
+    # 시점별 분기(이슈 #38 A안): 현재 시각(hour==now_hour)만 즉시 "🚨 긴급", 미래
+    # (hour>now_hour)는 "🔮 사전 경보"로 묶어 1건만 발송, 과거(hour<now_hour)는 뒷북이라
+    # 발송하지 않는다(단, 위에서 cur_emg_keys에는 이미 포함돼 재판정을 막는다).
+    current_emg = [item for item in new_emg if item["hour"] == now_hour]
+    future_emg = sorted((item for item in new_emg if item["hour"] > now_hour),
+                         key=lambda item: item["hour"])
+
+    for item in current_emg:
         if _emit(_emergency_embed(item, date_str)):
+            sent += 1
+    if future_emg:
+        if _emit(_forecast_alert_embed(future_emg, date_str)):
             sent += 1
 
     last_ctrl = ({"date": date_str, "hour": cur_item["hour"], "temp": cur_item["ctrl_temp"],

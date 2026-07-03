@@ -359,6 +359,119 @@ def test_simulate_control_without_deepcopy_drifts_across_calls():
     assert polluted_timeline[0]["devices_on"] != fresh_timeline[0]["devices_on"]
 
 
+# ── run_notify — 긴급 시점별 분기(이슈 #38 A안: 현재🚨/미래🔮 요약/과거 무발송) ──
+def _hot_forecast(date_str="20260703"):
+    """24시간 내내 45℃(밴드 상한을 훨씬 초과) — 냉방 풀가동으로도 못 잡아 이른 시간부터
+    늦은 시간까지 emergency_hours가 폭넓게 걸리는 프로파일."""
+    hourly = [{"date": date_str, "time": f"{h:02d}00", "temp": 45.0, "humidity": 70.0}
+              for h in range(24)]
+    return {"unavailable": False, "hourly": hourly, "daily": []}
+
+
+def test_run_notify_splits_current_future_past_emergency(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """현재 시각(now=12시) 기준 — 과거(hour<12)에 이미 걸린 긴급은 발송 안 함, 현재
+    (hour==12)는 개별 🚨 긴급, 미래(hour>12)는 🔮 사전 경보 1건으로 요약 발송돼야 한다."""
+    from datetime import date, datetime
+    from llm import weather
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: _hot_forecast())
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    today = date(2026, 7, 3)
+    now = datetime(2026, 7, 3, 12, 0)
+    live.run_notify(dry_run=False, today=today, now=now)
+
+    emergency_embeds = [e for e in sent if e["title"].startswith("🚨")]
+    forecast_embeds = [e for e in sent if e["title"].startswith("🔮")]
+
+    # 과거(hour<12)는 어떤 형태로도 발송되지 않는다 — 🚨 임베드의 "일시" 필드에
+    # 12시보다 이른 시각이 없어야 하고, 🔮 임베드는 미래만 담아야 한다.
+    for e in emergency_embeds:
+        hour_str = e["fields"][0]["value"].split()[-1]  # "HH시"
+        assert hour_str == "12시"
+    if forecast_embeds:
+        assert len(forecast_embeds) == 1
+        for f in forecast_embeds[0]["fields"]:
+            hour_str = f["name"].split()[-1]
+            assert int(hour_str.replace("시", "")) > 12
+
+
+def test_run_notify_emergency_dedup_no_resend_on_rerun(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """같은 now로 재실행하면 긴급(🚨/🔮) 재발송이 없어야 한다(dedup 키는 hour:kind)."""
+    from datetime import date, datetime
+    from llm import weather
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: _hot_forecast())
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    today = date(2026, 7, 3)
+    now = datetime(2026, 7, 3, 12, 0)
+    live.run_notify(dry_run=False, today=today, now=now)
+    n1 = len(sent)
+    assert n1 > 0
+
+    live.run_notify(dry_run=False, today=today, now=now)
+    n2 = len(sent) - n1
+    assert n2 == 0  # 재실행 — 긴급 재발송 0건(장치 전환 임베드는 별개라 총량이 아닌 증가분으로 확인)
+
+
+def test_run_notify_past_emergency_not_resent_after_now_advances(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """미래였던 시간대가 시간이 흘러 과거가 되면(예: now가 13시→15시로 진행) 그사이
+    이미 dedup 키에 등록된 시간대는 재발송되지 않는다(뒷북 제거와 dedup이 함께 성립)."""
+    from datetime import date, datetime
+    from llm import weather
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: _hot_forecast())
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    today = date(2026, 7, 3)
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 12, 0))
+    before = len(sent)
+    # 시간이 흘러 15시 재판정 — 12~15시가 이제 과거로 바뀌어도 이미 상태 키에 남아
+    # 있으므로 재발송되지 않아야 한다(신규 미래 구간만 있으면 그만큼만 늘어날 수 있음).
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 15, 0))
+    new_emergency_or_forecast = [e for e in sent[before:]
+                                  if e["title"].startswith("🚨") or e["title"].startswith("🔮")]
+    # 15시(현재) 자체가 이미 이전 실행의 "미래 요약"에 포함돼 dedup 키가 있으므로
+    # 신규 긴급성 임베드는 없어야 한다.
+    assert new_emergency_or_forecast == []
+
+
+def test_run_notify_midnight_reset_reallows_emergency_dispatch(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """자정 리셋(날짜가 바뀌면 emergency_hours 상태 초기화) 후에는 같은 시간대라도 다시
+    긴급 판정·발송이 가능해야 한다."""
+    from datetime import date, datetime
+    from llm import weather
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: _hot_forecast())
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    live.run_notify(dry_run=False, today=date(2026, 7, 3), now=datetime(2026, 7, 3, 12, 0))
+    before = len(sent)
+
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: _hot_forecast(date_str="20260704"))
+    live.run_notify(dry_run=False, today=date(2026, 7, 4), now=datetime(2026, 7, 4, 12, 0))
+    after_new_day = [e for e in sent[before:]
+                      if e["title"].startswith("🚨") or e["title"].startswith("🔮")]
+    assert after_new_day  # 자정 리셋 — 같은 프로파일이라도 다시 발송됨
+
+
 # ── run_notify — 상태 파일 dedup ─────────────────────────────────────────
 @pytest.fixture
 def _isolated_state(tmp_path, monkeypatch):
