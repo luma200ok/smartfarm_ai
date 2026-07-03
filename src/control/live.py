@@ -146,9 +146,37 @@ def _hum_pcontrol_delta(devices_on: "list[str]", ctrl_hum: float, setpoints) -> 
     return max(-HUM_P_MAX_DELTA, min(HUM_P_MAX_DELTA, raw))
 
 
-def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "list[dict]":
+def _clamp_into_band(value, low: float, high: float, deadband: float):
+    """밴드 안쪽(low+deadband ~ high-deadband)으로 클램프 — 자정 연속성 폴백(이슈 #35)에서
+    "이전에도 제어 운영 중이었다" 가정으로 0시 시작값을 밴드 밖 기준선 대신 안쪽에서
+    출발시킬 때 사용. value가 None이면 그대로 None."""
+    if value is None:
+        return None
+    lo, hi = low + deadband, high - deadband
+    if lo > hi:  # deadband가 밴드 폭보다 크면 퇴화 — 중앙값으로 폴백
+        return (low + high) / 2
+    return max(lo, min(hi, value))
+
+
+def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
+                      initial_ctrl: "dict | None" = None,
+                      fallback_clamp: bool = False) -> "list[dict]":
     """시간 순 재생 — controller.decide() 재사용, ON 장치 효과(시간 환산)를 다음 시간
     내부값에 반영해 "제어 후" 내부온·습도를 산출한다.
+
+    자정 연속성(이슈 #35) — 매일 0시를 기준선에서 새로 시작하면 어제 제어로 밴드 안에
+    있었던 값이 오늘 0시엔 밴드 밖(기준선 그대로)에서 출발하는 불연속이 생긴다(제어
+    상시 운영 전제와 모순). 이를 완화하기 위해:
+    - `initial_ctrl`이 주어지고 그 "date"가 정확히 어제(전일 마지막 실행 값으로 유효)면,
+      0시(baseline 첫 항목) 시작값을 기준선 대신 `initial_ctrl["temp"]`/`["hum"]`로
+      이어받는다. 오늘 날짜는 인정하지 않는다 — run_notify는 하루에 여러 번 호출되는
+      진입점이라 "오늘"까지 인정하면 호출마다 0시가 직전 호출의 "지금" 값으로 재시딩돼
+      하루 안에서도 타임라인이 드리프트하며 dedup·멱등성이 깨진다.
+    - `initial_ctrl`이 없거나 무효(그제 이전/None)하고 `fallback_clamp=True`면, "이전에도
+      제어 운영 중이었다"는 가정 하에 시작값을 밴드 안쪽(low+deadband~high-deadband)으로
+      클램프한다 — 기준선이 밴드 밖이어도 0시 ctrl은 밴드 안에서 시작.
+    - 둘 다 아니면(기본값, `fallback_clamp=False`) 기존 거동(기준선 그대로 시작) 유지 —
+      순수 시뮬레이션/리플레이·기존 테스트 무회귀용 기본값.
 
     제어 관성(누적) 방식(이슈 #27 리뷰 P2-1/2-2 픽스) — 매 시간 baseline으로 재기준하지
     않고, 이전 제어 결과(ctrl_prev)에 외기 변화분(base_next-base_prev)과 장치 효과
@@ -168,15 +196,40 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
     from control.effects import EFFECTS_HOURLY
 
     date = date or datetime.now().date()
+
+    # 유효성: last_ctrl의 date는 "어제"만 인정한다 — 오늘 날짜(같은 날 재실행)까지 인정하면
+    # 매 호출마다 0시를 직전 호출의 "지금" 값으로 재시딩해 하루 안에서도 타임라인이 호출마다
+    # 갱신되며 드리프트한다(run_notify는 같은 날 여러 번 호출되는 진입점이라 dedup·멱등성이
+    # 깨짐). 자정 연속성은 "어제 마지막 값 → 오늘 0시" 전환에서만 의미가 있으므로 어제로 제한.
+    seed_temp = seed_hum = None
+    if initial_ctrl and isinstance(date, _date):
+        from datetime import timedelta
+        yesterday_str = (date - timedelta(days=1)).isoformat()
+        if initial_ctrl.get("date") == yesterday_str:
+            seed_temp = initial_ctrl.get("temp")
+            seed_hum = initial_ctrl.get("hum")
+
     timeline = []
     ctrl_temp = None
     ctrl_hum = None
 
     for idx, item in enumerate(baseline):
         if ctrl_temp is None:
-            ctrl_temp = item["base_temp"]
+            if seed_temp is not None:
+                ctrl_temp = seed_temp
+            elif fallback_clamp:
+                ctrl_temp = _clamp_into_band(item["base_temp"], setpoints.temp_low,
+                                              setpoints.temp_high, setpoints.temp_deadband)
+            else:
+                ctrl_temp = item["base_temp"]
         if ctrl_hum is None:
-            ctrl_hum = item["base_hum"]
+            if seed_hum is not None:
+                ctrl_hum = seed_hum
+            elif fallback_clamp:
+                ctrl_hum = _clamp_into_band(item["base_hum"], setpoints.hum_low,
+                                             setpoints.hum_high, setpoints.hum_deadband)
+            else:
+                ctrl_hum = item["base_hum"]
 
         reading = {"온도내부_평균": ctrl_temp, "습도내부_평균": ctrl_hum}
         # hum_mode="center" — P-제어(델타가 hum_mid로 비례 수렴)에 맞춰 OFF 판정도 중앙
@@ -279,6 +332,13 @@ def _load_state() -> dict:
         return {}
 
 
+def load_last_ctrl() -> "dict | None":
+    """상태 파일에서 last_ctrl(직전 실행의 "제어 후" 값 시드)만 공개 API로 노출한다 —
+    호출부(app/views/monitor.py 등)가 내부 상태 파일 포맷(_load_state())에 직접
+    결합되지 않도록(이슈 #35 리뷰 P3). 읽기 실패해도 예외 전파 없이 None."""
+    return _load_state().get("last_ctrl")
+
+
 def _save_state(state: dict) -> None:
     """setpoints.save()와 동일한 원자적 쓰기 패턴 — 실패해도 예외 전파 없음."""
     try:
@@ -350,7 +410,8 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
                 sent += 1
         new_state = {"date": date_str, "fail_count": fail_count,
                      "devices": prev_state.get("devices", {}) if same_day else {},
-                     "emergency_hours": prev_state.get("emergency_hours", []) if same_day else []}
+                     "emergency_hours": prev_state.get("emergency_hours", []) if same_day else [],
+                     "last_ctrl": prev_state.get("last_ctrl")}
         if not dry_run:
             _save_state(new_state)
         return sent
@@ -358,7 +419,11 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
     sp = setpoints_mod.load()
     states = default_states()
     baseline = indoor_baseline(outdoor, date=today)
-    timeline = simulate_control(baseline, sp, states, date=today)
+    # 자정 연속성(이슈 #35) — 직전 실행이 남긴 "제어 후" 값을 시드로 이어받아 0시 불연속을
+    # 완화한다(prev_state["last_ctrl"], 없거나 무효하면 simulate_control이 밴드 클램프 폴백).
+    initial_ctrl = prev_state.get("last_ctrl")
+    timeline = simulate_control(baseline, sp, states, date=today,
+                                 initial_ctrl=initial_ctrl, fallback_clamp=True)
     emg = emergency_hours(timeline, sp)
 
     # 장치 전환 판정은 타임라인 마지막(=미래 예보 기반 마지막 시간) states가 아니라 "지금"에
@@ -382,8 +447,10 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
         if _emit(_emergency_embed(item, date_str)):
             sent += 1
 
+    last_ctrl = ({"date": date_str, "hour": cur_item["hour"], "temp": cur_item["ctrl_temp"],
+                  "hum": cur_item["ctrl_hum"]} if cur_item else prev_state.get("last_ctrl"))
     new_state = {"date": date_str, "fail_count": 0, "devices": cur_devices,
-                 "emergency_hours": sorted(cur_emg_keys)}
+                 "emergency_hours": sorted(cur_emg_keys), "last_ctrl": last_ctrl}
     if not dry_run:
         _save_state(new_state)
     return sent
