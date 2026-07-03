@@ -30,6 +30,23 @@ _MAX_RECENT = 10       # emergency() 판정에 필요한 3틱보다 여유 있�
 _MAX_LOG_ROWS = 30      # 제어 로그 테이블 최근 N건만 표시
 
 
+@st.cache_data(ttl=60)
+def _cached_kma_current():
+    """weather.get_current() UI 반복 방어층(이슈 #29 P2) — Streamlit rerun마다 동기 KMA
+    호출이 최악 34.5s 블로킹될 수 있어 뷰 레이어에 60s 캐시를 씌운다. weather.py 내부
+    TTL 캐시(10분)와 별개로, rerun 빈도가 그보다 훨씬 잦은 상황의 반복 블로킹을 막는
+    용도. 콜드스타트 최초 1회 블로킹은 수용."""
+    from llm import weather as kma_weather
+    return kma_weather.get_current()
+
+
+@st.cache_data(ttl=60)
+def _cached_today_outdoor():
+    """live.today_outdoor() UI 반복 방어층(이슈 #29 P2) — 위 _cached_kma_current()와 동일 이유."""
+    from control import live as live_mod
+    return live_mod.today_outdoor()
+
+
 def render_sensor_controls():
     """연도·시나리오 선택 + 날짜 재생(다음 날/슬라이더) → (vs, live, r) 또는 (None, None, None)."""
     from dl import infer
@@ -333,9 +350,8 @@ def render_forecast_row(r, date):
             ("잔차", f"{r['온도내부_평균'] - exp['평균']:+.1f}℃", None),
         ])
 
-    from llm import weather as kma_weather
     try:
-        current = kma_weather.get_current()
+        current = _cached_kma_current()
     except Exception:
         current = {"unavailable": True, "reason": "날씨 조회 중 오류"}
     if current.get("unavailable"):
@@ -343,6 +359,8 @@ def render_forecast_row(r, date):
     else:
         def _v(x, unit=""):
             return "-" if x is None else f"{x}{unit}"
+        if current.get("stale"):
+            st.caption("⏳ 기상청 갱신 지연 — 직전 조회 데이터 표시 중")
         st.caption(f"실시간 외기 참고 — {_v(current.get('temp'), '℃')} · "
                    f"습도 {_v(current.get('humidity'), '%')} (재생 날짜와 다를 수 있어요)")
 
@@ -396,7 +414,7 @@ def render_live_tab(setpoints):
     from control import live as live_mod
     from control.actuators import DEVICE_LABEL_KR
 
-    outdoor = live_mod.today_outdoor()
+    outdoor = _cached_today_outdoor()
     if outdoor is None:
         unavailable("오늘 운영", "KMA 외기 조회 실패(키 미설정 또는 API 오류)")
         st.caption("🧪 시뮬레이션 탭에서 리플레이로 동작을 확인할 수 있어요.")

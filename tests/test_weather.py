@@ -224,11 +224,11 @@ def test_retry_fails_then_negative_cache_short_circuits(monkeypatch):
     with patch("requests.get", side_effect=Exception("timeout")) as m:
         r1 = weather.get_current(37.5665, 126.9780)
         assert r1["unavailable"] is True
-        assert m.call_count == 2                          # 최초 시도 + 재시도 1회
+        assert m.call_count == 3                          # 최초 시도 + 재시도 2회(이슈 #29)
 
         r2 = weather.get_current(37.5665, 126.9780)        # 실패 캐시 TTL(60s) 내 재요청
         assert r2["unavailable"] is True
-        assert m.call_count == 2                           # 추가 호출 없음(negative cache hit)
+        assert m.call_count == 3                           # 추가 호출 없음(negative cache hit)
 
 
 def test_permanent_4xx_error_skips_retry(monkeypatch):
@@ -259,8 +259,8 @@ def test_429_rate_limit_still_retries(monkeypatch):
         r = weather.get_current(37.5665, 126.9780)
 
     assert r["unavailable"] is True
-    assert m.call_count == 2              # 최초 시도 + 재시도 1회
-    assert len(sleep_calls) == 1          # sleep 1회 호출(재시도 대기)
+    assert m.call_count == 3              # 최초 시도 + 재시도 2회(이슈 #29)
+    assert len(sleep_calls) == 2          # sleep 2회 호출(1.5s, 3s 백오프)
 
 
 def test_clear_cache_also_clears_negative_cache(monkeypatch):
@@ -270,10 +270,96 @@ def test_clear_cache_also_clears_negative_cache(monkeypatch):
     with patch("requests.get", side_effect=Exception("timeout")) as m:
         r1 = weather.get_current(37.5665, 126.9780)
         assert r1["unavailable"] is True
-        assert m.call_count == 2
+        assert m.call_count == 3
 
         weather.clear_cache()
 
         r2 = weather.get_current(37.5665, 126.9780)
         assert r2["unavailable"] is True
-        assert m.call_count == 4                          # 실패 캐시 비워져 재호출(2회 더)
+        assert m.call_count == 6                          # 실패 캐시 비워져 재호출(3회 더)
+
+
+# ── 이슈 #29 — stale-while-error 폴백 ────────────────────────────────────
+
+def test_fresh_cache_has_no_stale_flag(monkeypatch):
+    """신선 캐시는 stale 키가 없거나 False여야 함."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    with patch("requests.get", return_value=MagicMock(
+            status_code=200, json=lambda: _ncst_response())):
+        r = weather.get_current(37.5665, 126.9780)
+    assert not r.get("stale")
+
+
+def test_ttl_expired_request_fails_returns_stale(monkeypatch):
+    """TTL 만료 후 재요청 실패 시 만료된 성공 캐시를 stale=True로 반환."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+
+    with patch("requests.get", return_value=MagicMock(
+            status_code=200, json=lambda: _ncst_response())):
+        r1 = weather.get_current(37.5665, 126.9780)
+    assert r1["unavailable"] is False
+
+    # TTL(getUltraSrtNcst=600s) 만료 시뮬레이션 — 캐시 타임스탬프를 과거로 조작
+    key = ("getUltraSrtNcst", 60, 127)
+    ts, data = weather._CACHE[key]
+    weather._CACHE[key] = (ts - 700, data)
+
+    with patch("requests.get", side_effect=Exception("timeout")) as m:
+        r2 = weather.get_current(37.5665, 126.9780)
+    assert r2["unavailable"] is False
+    assert r2["stale"] is True
+    assert r2["temp"] == 23.5
+    assert m.call_count == 3                               # 재시도까지 모두 실패 후 stale 폴백
+
+
+def test_stale_beyond_max_age_is_unavailable(monkeypatch):
+    """stale 상한(_STALE_MAX_AGE)을 넘으면 stale 폴백 없이 unavailable."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+
+    with patch("requests.get", return_value=MagicMock(
+            status_code=200, json=lambda: _ncst_response())):
+        weather.get_current(37.5665, 126.9780)
+
+    key = ("getUltraSrtNcst", 60, 127)
+    ts, data = weather._CACHE[key]
+    weather._CACHE[key] = (ts - weather._STALE_MAX_AGE - 1, data)
+
+    with patch("requests.get", side_effect=Exception("timeout")) as m:
+        r = weather.get_current(37.5665, 126.9780)
+    assert r["unavailable"] is True
+    assert "stale" not in r
+    assert m.call_count == 3
+
+
+def test_no_success_cache_and_failure_is_unavailable(monkeypatch):
+    """성공 캐시가 전혀 없는 상태에서 실패하면 기존대로 unavailable(stale 없음)."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+    with patch("requests.get", side_effect=Exception("timeout")):
+        r = weather.get_current(37.5665, 126.9780)
+    assert r["unavailable"] is True
+    assert "stale" not in r
+
+
+def test_clear_cache_removes_stale_data_too(monkeypatch):
+    """clear_cache() 후에는 stale 폴백도 사라져야 함(전량 삭제 유지)."""
+    monkeypatch.setenv("KMA_SERVICE_KEY", "dummy-key")
+    monkeypatch.setattr(weather.time, "sleep", lambda *_: None)
+
+    with patch("requests.get", return_value=MagicMock(
+            status_code=200, json=lambda: _ncst_response())):
+        weather.get_current(37.5665, 126.9780)
+
+    key = ("getUltraSrtNcst", 60, 127)
+    ts, data = weather._CACHE[key]
+    weather._CACHE[key] = (ts - 700, data)                 # TTL 만료(stale 가능 상태)
+
+    weather.clear_cache()
+
+    with patch("requests.get", side_effect=Exception("timeout")) as m:
+        r = weather.get_current(37.5665, 126.9780)
+    assert r["unavailable"] is True
+    assert "stale" not in r
+    assert m.call_count == 3

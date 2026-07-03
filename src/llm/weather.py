@@ -39,8 +39,11 @@ _TTL = {"getUltraSrtNcst": 600, "getVilageFcst": 1800}
 _FAIL_CACHE: dict[tuple[str, int, int], float] = {}
 _FAIL_TTL = 60
 
-# 1회 재시도 대기(초) — time.sleep 사용, 테스트에서 monkeypatch로 무력화 가능
-_RETRY_DELAY = 1.5
+# 재시도 대기(초) — 1차 실패 후 1.5s, 2차 실패 후 3s 백오프. time.sleep 사용, 테스트에서 monkeypatch로 무력화 가능
+_RETRY_DELAYS = [1.5, 3.0]
+
+# stale-while-error 상한(초) — 신선 캐시가 만료돼도 이 나이 이내면 stale 데이터로 폴백(이슈 #29)
+_STALE_MAX_AGE = 6 * 3600
 
 
 def _farm_location() -> tuple[float, float]:
@@ -113,6 +116,22 @@ def _cache_put(endpoint: str, nx: int, ny: int, data: dict) -> None:
     _CACHE[(endpoint, nx, ny)] = (time.time(), data)
 
 
+def _cache_get_stale(endpoint: str, nx: int, ny: int) -> dict | None:
+    """TTL 만료 후에도 보관 중인 성공 캐시를 stale 상한(_STALE_MAX_AGE) 이내면 반환.
+
+    반환 dict는 원본 캐시를 변경하지 않도록 사본에 "stale": True 를 추가한다.
+    """
+    hit = _CACHE.get((endpoint, nx, ny))
+    if hit is None:
+        return None
+    ts, data = hit
+    if time.time() - ts > _STALE_MAX_AGE:
+        return None
+    stale = dict(data)
+    stale["stale"] = True
+    return stale
+
+
 def _fail_cache_hit(endpoint: str, nx: int, ny: int) -> bool:
     ts = _FAIL_CACHE.get((endpoint, nx, ny))
     if ts is None:
@@ -179,15 +198,16 @@ def _normalize_items(raw) -> list:
 
 
 def _request(endpoint: str, params: dict) -> dict | None:
-    """공통 HTTP 호출. 실패/오류 시 1.5초 대기 후 1회 재시도, 그래도 실패면 None(예외 절대 전파 안 함).
+    """공통 HTTP 호출. 실패/오류 시 백오프 후 재시도(최대 3회 시도), 그래도 실패면 None(예외 절대 전파 안 함).
 
-    data.go.kr 간헐적 429/타임아웃 대응(이슈 #6 후속) — 재시도 1회로 일시 장애 흡수.
+    data.go.kr 간헐적 429/타임아웃 대응(이슈 #6/#29) — 1.5s/3s 백오프로 2회 재시도해 일시 장애 흡수.
     """
     key = os.getenv("KMA_SERVICE_KEY")
     if not key:
         return None
     q = {"serviceKey": key, "pageNo": 1, "dataType": "JSON", **params}
-    for attempt in range(2):
+    max_attempts = len(_RETRY_DELAYS) + 1
+    for attempt in range(max_attempts):
         try:
             r = requests.get(f"{_BASE_URL}/{endpoint}", params=q, timeout=_TIMEOUT)
             r.raise_for_status()
@@ -195,8 +215,8 @@ def _request(endpoint: str, params: dict) -> dict | None:
             result_code = body["response"]["header"]["resultCode"]
             if result_code != "00":
                 _log.warning("KMA %s resultCode=%s", endpoint, result_code)
-                if attempt == 0:
-                    time.sleep(_RETRY_DELAY)
+                if attempt < max_attempts - 1:
+                    time.sleep(_RETRY_DELAYS[attempt])
                     continue
                 return None
             items = _normalize_items(body["response"]["body"]["items"]["item"])
@@ -209,15 +229,15 @@ def _request(endpoint: str, params: dict) -> dict | None:
                 # 401/403/키 오류 등 영구(4xx) 오류는 재시도해도 결과가 같으므로 즉시 포기(불필요 지연 제거)
                 # 429(레이트리밋)는 일시적 오류이므로 재시도 대상으로 유지
                 return None
-            if attempt == 0:
-                time.sleep(_RETRY_DELAY)
+            if attempt < max_attempts - 1:
+                time.sleep(_RETRY_DELAYS[attempt])
                 continue
             return None
         except Exception as e:
             # 예외 문자열에 요청 URL(serviceKey 포함)이 섞일 수 있어 타입만 기록(notify.py와 동일 원칙)
             _log.warning("KMA %s 호출 실패: %s", endpoint, type(e).__name__)
-            if attempt == 0:
-                time.sleep(_RETRY_DELAY)
+            if attempt < max_attempts - 1:
+                time.sleep(_RETRY_DELAYS[attempt])
                 continue
             return None
     return None
@@ -236,6 +256,9 @@ def get_current(lat: float | None = None, lon: float | None = None) -> dict:
     if cached is not None:
         return cached
     if _fail_cache_hit("getUltraSrtNcst", nx, ny):
+        stale = _cache_get_stale("getUltraSrtNcst", nx, ny)
+        if stale is not None:
+            return stale
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류(잠시 후 재시도)"}
 
     base_date, base_time = _ultra_srt_base()
@@ -245,6 +268,9 @@ def get_current(lat: float | None = None, lon: float | None = None) -> dict:
     })
     if resp is None:
         _fail_cache_put("getUltraSrtNcst", nx, ny)
+        stale = _cache_get_stale("getUltraSrtNcst", nx, ny)
+        if stale is not None:
+            return stale
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류"}
 
     values = {}
@@ -279,6 +305,9 @@ def get_forecast_3d(lat: float | None = None, lon: float | None = None) -> dict:
     if cached is not None:
         return cached
     if _fail_cache_hit("getVilageFcst", nx, ny):
+        stale = _cache_get_stale("getVilageFcst", nx, ny)
+        if stale is not None:
+            return stale
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류(잠시 후 재시도)"}
 
     base_date, base_time = _vilage_fcst_base()
@@ -288,6 +317,9 @@ def get_forecast_3d(lat: float | None = None, lon: float | None = None) -> dict:
     })
     if resp is None:
         _fail_cache_put("getVilageFcst", nx, ny)
+        stale = _cache_get_stale("getVilageFcst", nx, ny)
+        if stale is not None:
+            return stale
         return {"unavailable": True, "reason": "KMA API 호출 실패 또는 응답 오류"}
 
     daily: dict[str, dict] = {}
