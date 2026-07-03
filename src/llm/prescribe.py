@@ -38,6 +38,10 @@ load_dotenv(ROOT / ".env", override=True)
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
 MAX_TOOL_ROUNDS = 4
+KEEP_ALIVE = "30m"
+# tool 라운드 중 자유텍스트로 흐를 때(다음 라운드에서 버려지는 응답) 낭비를 줄이는 캡.
+# tool_calls 자체는 num_predict 캡과 무관하게 정상 생성됨(짧은 함수호출 토큰이라 영향 적음).
+TOOL_ROUND_NUM_PREDICT = 128
 
 SYSTEM_PROMPT = (
     "너는 토마토 재배 초보자를 돕는 한국어 재배 도우미다.\n"
@@ -134,7 +138,10 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
 
     diag = None
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = ollama.chat(model=MODEL, messages=messages, tools=TOOL_SCHEMAS)
+        # C1(#15) — 다음 tool 라운드에서 어차피 버려지는 자유텍스트 장문 생성을 128tok으로 캡.
+        # tool_calls를 원하면 여전히 허용(tools=는 그대로 넘김) — 환각방어·MAX_TOOL_ROUNDS 로직 불변.
+        resp = ollama.chat(model=MODEL, messages=messages, tools=TOOL_SCHEMAS,
+                           options={"num_predict": TOOL_ROUND_NUM_PREDICT}, keep_alive=KEEP_ALIVE)
         msg = resp["message"]
         messages.append(msg)
         calls = msg.get("tool_calls") or []
@@ -184,7 +191,7 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
         final = ollama.chat(model=MODEL, messages=messages,
-                            format=Prescription.model_json_schema())
+                            format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)

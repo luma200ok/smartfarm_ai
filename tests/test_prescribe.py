@@ -171,6 +171,21 @@ def test_prescribe_skips_forecast_for_non_leafmold(monkeypatch):
     assert called["n"] == 0
 
 
+def test_prescribe_tool_round_caps_num_predict_and_sets_keep_alive():
+    """C1(#15) — tool 라운드 chat 호출에 num_predict 캡·keep_alive 전달 검증(낭비 라운드 지연 완화)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    with patch("ollama.chat", side_effect=responses) as mock_chat:
+        prescribe.prescribe("오이 병도 알려줘")
+    first_call_kwargs = mock_chat.call_args_list[0].kwargs
+    assert first_call_kwargs["options"] == {"num_predict": prescribe.TOOL_ROUND_NUM_PREDICT}
+    assert first_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+    final_call_kwargs = mock_chat.call_args_list[1].kwargs
+    assert final_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+
+
 def _ollama_up():
     try:
         ollama.list()
