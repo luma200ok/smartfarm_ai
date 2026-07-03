@@ -1,0 +1,15 @@
+[Unit]
+Description=SmartFarm AI 오늘 운영 모드 알림 (control.live --notify, oneshot)
+# ⚠️ 유닛명은 반드시 smartfarm-control — 기존 smartfarm.service(Java)·smartfarm-ai.service(Streamlit)와
+# 충돌 금지. smartfarm-control.timer(hourly)가 이 유닛을 트리거한다(이슈 #23).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=opc
+WorkingDirectory=/opt/smartfarm_ai
+Environment=PYTHONPATH=/opt/smartfarm_ai/src
+ExecStart=/opt/smartfarm_ai/.venv/bin/python -m control.live --notify
+# 1회 실행 후 종료(oneshot) — 반복은 smartfarm-control.timer(OnCalendar=hourly)가 담당.
+# 로그는 journalctl -u smartfarm-control 로 확인.
