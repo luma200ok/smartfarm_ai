@@ -24,6 +24,24 @@ def _band_state(value: float, low: float, high: float, deadband: float,
     return "normal"
 
 
+def _hum_band_state(value: float, low: float, high: float, deadband: float,
+                     was_high: bool, was_low: bool) -> str:
+    """습도 전용 밴드 판정(이슈 #33) — ON은 온도와 동일하게 밴드 밖 이탈 시지만, OFF는
+    밴드 경계가 아니라 **밴드 중앙(mid) 근접 시**다(P-제어 목표가 중앙이므로 OFF 기준도
+    중앙에 맞춘다). 지속(was_high/was_low) 중에는 |value-mid|가 deadband를 넘어야(=
+    아직 중앙에서 충분히 먼) "high"/"low" 유지, deadband 이내로 들어오면 "normal"(OFF)."""
+    mid = (low + high) / 2
+    if value > high:
+        return "high"
+    if value < low:
+        return "low"
+    if was_high and abs(value - mid) > deadband:
+        return "high"
+    if was_low and abs(value - mid) > deadband:
+        return "low"
+    return "normal"
+
+
 def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) -> list[ControlLog]:
     """센서값+설정 밴드+현재 장치 상태 → 상태 변화(states 갱신) + 발생한 ControlLog 목록.
 
@@ -40,8 +58,8 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
 
     temp_state = _band_state(temp, setpoints.temp_low, setpoints.temp_high,
                               setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
-    hum_state = _band_state(hum, setpoints.hum_low, setpoints.hum_high,
-                             setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
+    hum_state = _hum_band_state(hum, setpoints.hum_low, setpoints.hum_high,
+                                 setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
 
     want_cooling = temp_state == "high"
     want_heater = temp_state == "low"
