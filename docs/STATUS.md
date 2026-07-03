@@ -22,7 +22,7 @@
 | ➕ 날씨 | `src/llm/weather.py`·`tools.py`(get_weather)·`pipeline.py`(weather_qa) | 기상청 단기예보 API — 외기 실황·3일 예보 + 날씨 Q&A(앱 외부날씨 섹션). PR #9·#11, 이슈 #6 1단계 |
 | ➕ 기대값 | `src/ml/train_expect.py`·`src/llm/expect.py`·`monitor.py`(cause·equip_anom·feedforward)·`sim/virtual_sensor.py`(inject) | 외기→실내 기대값 회귀(XGB MAE 1.11/1.44℃) — 원인 구분 경보·조기 감지·사전 경보·시나리오 데모. PR #12·#13, 이슈 #6 완결(+#2 흡수) |
 | ➕ 관제 | `src/control/`(setpoints·actuators·controller·effects)·`app/views/monitor.py` | 규칙 기반(LLM 무관) 설정 밴드+히스테리시스 → 장치 4종(제습기·가습기·쿨링팬·히터, 이슈 #27에서 환기→제습기) 자동 ON/OFF·수동 토글·효과 피드백(inject tag 분리)·제어 로그·긴급 알림(자기정리 dedup). 앱 «환경 관제»로 개편(LLM 코치·날씨 Q&A 제거, pipeline·CLI는 유지). PR #20, 이슈 #17. 설정 밴드는 `data/control_setpoints.json` 파일 영속(전역 공유, 폴백·병합 저장 — PR #22, 이슈 #21) |
-| ➕ 오늘 운영 | `src/control/live.py`·`deploy/smartfarm-control.{service,timer}` | **오늘 날짜 운영 모드**: KMA 실황·시간별 예보 → 기대값 모델로 오늘 내부 기준선 → 밴드 초과 시 장치 ON → 제어 후 값 조정(시간당 ±2℃/±8%p 관성 제어+관통 방지, 이슈 #27). 앱 [오늘 운영/시뮬레이션] 탭(온·습도 반반 차트+지금 마커·예보 음영, 이슈 #25). 상주 알림: 서버 systemd 타이머 매시 실행 → 장치 전환·이상·긴급 디스코드(`data/control_live_state.json` dedup). PR #24, 이슈 #23 |
+| ➕ 오늘 운영 | `src/control/live.py`·`deploy/smartfarm-control.{service,timer}` | **오늘 날짜 운영 모드**: KMA 실황·시간별 예보 → 기대값 모델로 오늘 내부 기준선 → 밴드 초과 시 장치 ON → 제어 후 값 조정(온도=서모스탯 관성 제어·습도=밴드 중앙 P-제어, 이슈 #27·#33). 앱 [오늘 운영/시뮬레이션] 탭(온·습도 반반 차트+지금 마커·예보 음영, 이슈 #25). 상주 알림: 서버 systemd 타이머 매시 실행 → 장치 전환·이상·긴급 디스코드(`data/control_live_state.json` dedup). PR #24, 이슈 #23 |
 
 앱: `streamlit run app/streamlit_app.py` → **서비스형 2그룹 네비**([서비스] 농장 대시보드·잎 병해 진단·AI 처방·환경 관제·작물 환경 추천 / [프로젝트 기록] 개요·성과, ML/DL 실험 기록). `app/views/` 8페이지 + 공통 `ui.py`·`state.py`·`nav.py`·`.streamlit/config.toml` 테마 (이슈 #10, PR #14).
 
@@ -45,6 +45,7 @@
 - [x] **처방 지연 개선**(이슈 #15 클로즈): tool 라운드 num_predict 캡·keep_alive 30m·프롬프트 -17~20%·st.status 진행 표시 — 로컬 웜 28→17~19s(-35%), OCI CPU 추론 부담 완화 (PR #16)
 - [x] **처방 fast-path 전환**(이슈 #18 클로즈): 진단·RAG·예보 코드 직행 + LLM 최종 JSON 1-call + writer 모델 분리(`OLLAMA_WRITER_MODEL`, 서버=exaone3.5:2.4b) — **서버 342.6→웜 16.2s(-95%)**, 로컬 10~15s. agentic prescribe()는 CLI·Q&A 유지 (PR #19)
 - [x] **관제형 대시보드 개편**(이슈 #17 클로즈): 규칙 기반 밴드 자동제어(장치 4종 시뮬+효과 피드백)·제어 로그·긴급 디스코드 알림, 모니터링→«환경 관제» 전환 — 서버 배포·실검증 완료 (PR #20)
+- [x] **습도 P-제어 전환**(이슈 #33 클로즈): 온도=서모스탯 유지·습도=밴드 중앙 목표 비례 제어(캡 ±8%p/h, hum_mode 분리로 리플레이 무영향) + 차트 줌 — 서버 실검증(중앙 수렴) (PR #34)
 - [x] **관제 표시·복원력 개선**(이슈 #29·#31 클로즈): KMA stale-while-error 폴백·재시도 3회·UI 60s 캐시(PR #30) + 오늘 제어 이벤트 실행/🔮예정 분리 표시(PR #32)
 - [x] **관제 장치 개편**(이슈 #27 클로즈): 환기→제습기(장치 4종 대칭), 시간당 효과 상수(±2℃/h·±8%p/h)+관성(누적) 제어·관통 방지 클램프 — 제어 후 라인 가시화, 채터링·교대 진동 해소(구버전 대조 실증) (PR #28)
 - [x] **관제 레이아웃 재배치**(이슈 #25 클로즈): 설정 밴드·장치 카드를 오늘 운영 탭으로(수동 토글 live 반영, deepcopy로 리런 드리프트 차단), 온·습도 반반 차트+지금 마커·예보 음영, 시뮬 탭 '기대값 vs 실측' 리네이밍, altair 의존성 명시 (PR #26)
