@@ -8,6 +8,7 @@
 시간대별 제어 전/후 내부 온·습도를 보여준다(src/control/live.py, 규칙 기반). 기존
 리플레이 시뮬레이션은 "🧪 시뮬레이션" 탭으로 그대로 이동(로직 변경 없음).
 """
+from copy import deepcopy
 from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
@@ -222,32 +223,6 @@ def render_setpoints(setpoints):
         setpoints.hum_high = merged.hum_high
 
 
-def render_devices(states, setpoints, r, date):
-    from control import controller
-    from control.actuators import DEVICE_LABEL_KR, DEVICES
-
-    section("🔌 장치", "자동 모드는 설정 밴드에 따라 자동으로 켜지고 꺼져요. 수동으로 직접 제어할 수도 있어요.")
-    cols = st.columns(4)
-    for col, device in zip(cols, DEVICES):
-        state = states[device]
-        with col:
-            st.markdown(f"**{DEVICE_LABEL_KR[device]}**")
-            status_badge = "🟢 ON" if state.on else "⚪ OFF"
-            st.caption(status_badge + (" · 자동" if state.auto else " · 수동"))
-            new_auto = st.toggle("자동 모드", value=state.auto, key=f"auto_{device}")
-            if new_auto != state.auto:
-                state.auto = new_auto
-            if not state.auto:
-                if st.button(("끄기" if state.on else "켜기"), key=f"manual_{device}",
-                              use_container_width=True):
-                    state.on = not state.on
-                    log_list = st.session_state.setdefault(K_CONTROL_LOG, [])
-                    log_list.append(controller.ControlLog(
-                        date=str(date), device=device,
-                        action="ON" if state.on else "OFF",
-                        reason="수동 조작", mode="manual"))
-
-
 def _get_live_device_states():
     """오늘 운영 탭 전용 장치 상태(이슈 #25) — 시뮬용 K_DEVICE_STATES와 분리 보관.
 
@@ -422,7 +397,12 @@ def render_live_tab(setpoints):
     today = _date.today()
     states = _get_live_device_states()
     baseline = live_mod.indoor_baseline(outdoor, date=today)
-    timeline = live_mod.simulate_control(baseline, setpoints, states, date=today)
+    # simulate_control()은 전달받은 states를 시간대별로 in-place mutate한다 — 세션 원본
+    # states를 그대로 넘기면 다음 리런의 "0시 시작" 상태가 직전 리런의 "23시 결과"로
+    # 오염돼 auto 장치 타임라인이 리런마다 드리프트한다(P1). 시뮬용 사본을 deepcopy로
+    # 분리해 세션에는 사용자가 조작한 auto/수동 값만 남긴다 — 카드 표시·토글은 원본 states.
+    sim_states = deepcopy(states)
+    timeline = live_mod.simulate_control(baseline, setpoints, sim_states, date=today)
     emg = live_mod.emergency_hours(timeline, setpoints)
 
     if not timeline:
