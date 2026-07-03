@@ -2,7 +2,7 @@
 SmartFarm AI — Streamlit 멀티페이지 엔트리포인트
 
 st.navigation 2그룹 구성(이슈 #10):
-  [서비스] 농장 대시보드 / 잎 병해 진단 / AI 처방 / 환경 모니터링 / 작물 환경 추천
+  [서비스] 농장 대시보드 / 잎 병해 진단 / AI 처방 / 환경 관제 / 작물 환경 추천
   [프로젝트 기록] 프로젝트 개요·성과 / ML 실험 기록 / DL 실험 기록
 set_page_config 는 여기서 1회만 호출(각 view의 render() 에서는 호출 금지).
 페이지 객체(st.Page)는 app/nav.py가 단일 진실로 소유 — st.page_link에서도 동일 인스턴스를 참조한다.

@@ -23,7 +23,7 @@ from dl_eval import render as _dl_eval
 PAGE_DASHBOARD = st.Page(_dashboard, title="농장 대시보드", icon="🏠", url_path="home", default=True)
 PAGE_DIAGNOSIS = st.Page(_diagnosis, title="잎 병해 진단", icon="🔬", url_path="diagnosis")
 PAGE_PRESCRIBE = st.Page(_prescribe, title="AI 처방", icon="💊", url_path="prescribe")
-PAGE_MONITOR = st.Page(_monitor, title="환경 모니터링", icon="🌡️", url_path="monitor")
+PAGE_MONITOR = st.Page(_monitor, title="환경 관제", icon="🌡️", url_path="monitor")
 PAGE_CROPS = st.Page(_crops, title="작물 환경 추천", icon="🌾", url_path="crops")
 PAGE_ABOUT = st.Page(_about, title="프로젝트 개요·성과", icon="📈", url_path="about")
 PAGE_ML_EVAL = st.Page(_ml_eval, title="ML 실험 기록", icon="📊", url_path="ml-eval")
