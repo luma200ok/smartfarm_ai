@@ -33,10 +33,15 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     def cur_on(device: str) -> bool:
         return states[device].on
 
+    # vent는 온도·습도 두 규칙이 공유하는 장치라, 습도측 히스테리시스(was_high)는 vent가
+    # "습도 사유"로 켜져 있을 때만 인정한다 — 온도 사유로 켜진 vent를 습도 데드밴드 유지로
+    # 오인하지 않도록(이슈 #17 P2-2).
+    vent_was_high_hum = cur_on("vent") and states["vent"].cause == "hum"
+
     temp_state = _band_state(temp, setpoints.temp_low, setpoints.temp_high,
                               setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
     hum_state = _band_state(hum, setpoints.hum_low, setpoints.hum_high,
-                             setpoints.hum_deadband, cur_on("vent"), cur_on("humidifier"))
+                             setpoints.hum_deadband, vent_was_high_hum, cur_on("humidifier"))
 
     want_cooling = temp_state == "high"
     want_heater = temp_state == "low"
@@ -49,25 +54,29 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     # vent: 온도 상한 초과 시 강제 ON, 온도 하한 미달 시 강제 OFF(스펙 명시),
     # 온도가 정상이면 습도 판정에 위임.
     if temp_state == "high":
-        want_vent = True
+        want_vent, vent_cause = True, "temp"
         vent_reason = f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃) — 환기 가동"
     elif temp_state == "low":
-        want_vent = False
+        want_vent, vent_cause = False, None
         vent_reason = "온도 하한 미달 — 난방 우선(환기 정지)"
     else:
         want_vent = hum_state == "high"
+        vent_cause = "hum" if want_vent else None
         vent_reason = (f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%) — 환기 가동"
                         if want_vent else "밴드 정상 범위 복귀")
 
     want_humidifier = hum_state == "low"
 
-    def _apply(device: str, want: bool, reason: str):
+    def _apply(device: str, want: bool, reason: str, cause: str | None = None):
         state = states[device]
         if not state.auto:
             return
         if state.on == want:
+            if want:  # 지속 ON — cause만 최신화(온도↔습도 전환 대비)
+                state.cause = cause
             return
         state.on = want
+        state.cause = cause if want else None
         logs.append(ControlLog(date=str(date), device=device, action="ON" if want else "OFF",
                                 reason=reason, mode="auto"))
 
@@ -77,7 +86,7 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None) 
     _apply("heater", want_heater,
            f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)" if want_heater
            else "밴드 정상 범위 복귀")
-    _apply("vent", want_vent, vent_reason)
+    _apply("vent", want_vent, vent_reason, cause=vent_cause)
     _apply("humidifier", want_humidifier,
            f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)" if want_humidifier
            else "밴드 정상 범위 복귀")
@@ -90,15 +99,11 @@ def akey(alert: dict) -> str:
     return f"{alert['key']}:{alert['level']}"
 
 
-def emergency(recent_readings: list[dict], setpoints, states: dict[str, DeviceState],
-              active: set | None = None) -> dict | None:
-    """최근 3틱 연속 밴드 밖 + 관련 장치 풀가동이면 긴급 경보 1건(없으면 None).
-
-    dedup: active(akey() 스타일 "key:level" 키 집합)에 이미 있으면 재발동하지 않음.
-    """
-    active = active or set()
+def _emergency_candidates(recent_readings: list[dict], setpoints,
+                           states: dict[str, DeviceState]) -> list[dict]:
+    """최근 3틱 연속 밴드 밖 + 관련 장치 풀가동 조건을 만족하는 후보 alert 전부(없으면 [])."""
     if len(recent_readings) < 3:
-        return None
+        return []
     last3 = recent_readings[-3:]
     temps = [r.get("온도내부_평균") for r in last3]
     hums = [r.get("습도내부_평균") for r in last3]
@@ -106,19 +111,31 @@ def emergency(recent_readings: list[dict], setpoints, states: dict[str, DeviceSt
     candidates = []
     if all(t is not None and t > setpoints.temp_high for t in temps) \
             and states["cooling_fan"].on and states["vent"].on:
-        candidates.append({"key": "control_limit:temp", "level": "경고",
+        candidates.append({"key": "control_limit:temp_high", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(냉방·환기 풀가동에도 고온 지속)"})
     if all(t is not None and t < setpoints.temp_low for t in temps) and states["heater"].on:
-        candidates.append({"key": "control_limit:temp", "level": "경고",
+        candidates.append({"key": "control_limit:temp_low", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(난방 풀가동에도 저온 지속)"})
     if all(h is not None and h > setpoints.hum_high for h in hums) and states["vent"].on:
-        candidates.append({"key": "control_limit:hum", "level": "경고",
+        candidates.append({"key": "control_limit:hum_high", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(환기 풀가동에도 고습 지속)"})
     if all(h is not None and h < setpoints.hum_low for h in hums) and states["humidifier"].on:
-        candidates.append({"key": "control_limit:hum", "level": "경고",
+        candidates.append({"key": "control_limit:hum_low", "level": "경고",
                             "reason": "제어 한계 초과 — 설비 점검 필요(가습 풀가동에도 저습 지속)"})
+    return candidates
 
-    for alert in candidates:
-        if akey(alert) not in active:
-            return alert
-    return None
+
+def emergency(recent_readings: list[dict], setpoints, states: dict[str, DeviceState],
+              active: set | None = None) -> tuple[list[dict], set]:
+    """긴급 경보 판정 — src/llm/monitor.evaluate()와 동일한 자기 정리(self-cleaning) dedup 패턴.
+
+    반환: (신규로 진입한 alert 목록, 현재 조건을 만족하는 키셋). 호출부는 매 틱
+    active를 반환된 키셋으로 **교체**해야 한다(add만 하면 조건 해소 후에도 영구 억제됨 —
+    이슈 #17 P1-1). 키는 control_limit:temp_high/temp_low/hum_high/hum_low로 분리해
+    상한·하한이 같은 키를 공유해 서로를 지우는 문제를 방지한다(P1-2).
+    """
+    active = active or set()
+    candidates = _emergency_candidates(recent_readings, setpoints, states)
+    keys = {akey(a) for a in candidates}
+    to_send = [a for a in candidates if akey(a) not in active]
+    return to_send, keys

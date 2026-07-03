@@ -23,6 +23,7 @@ K_CONTROL_ACTIVE = "monitor.control_active_alerts"
 K_CONTROL_LAST_DATE = "monitor.control_last_date"
 K_RECENT_READINGS = "monitor.recent_readings"
 K_DISCORD_CONTROL_TOGGLE = "monitor.discord_control_toggle"
+K_CONTROL_YEAR = "monitor.control_year"   # 연도별 제어 상태 리셋 판단용(이슈 #17 P2-1)
 
 
 def get_vsensor(year):

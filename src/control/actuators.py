@@ -13,10 +13,15 @@ DEVICE_LABEL_KR = {
 
 @dataclass
 class DeviceState:
-    """장치 1개의 현재 상태 — on(ON/OFF)·auto(자동/수동 모드)."""
+    """장치 1개의 현재 상태 — on(ON/OFF)·auto(자동/수동 모드).
+
+    cause: 현재 ON 상태를 유발한 판정 출처("temp"|"hum"|None) — vent처럼 온도·습도 두
+    규칙이 공유하는 장치의 히스테리시스가 서로 오염되지 않도록 controller.decide()가 갱신한다
+    (이슈 #17 P2-2)."""
 
     on: bool = False
     auto: bool = True
+    cause: str | None = None
 
 
 @dataclass
