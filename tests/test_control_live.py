@@ -132,6 +132,54 @@ def test_simulate_control_no_chattering_at_boundary():
     assert on_flags == [True, True, True, True]
 
 
+def test_simulate_control_deterministic_when_states_deepcopied_between_calls():
+    """오늘 운영 탭(app/views/monitor.py) P1 회귀 방지 — simulate_control()은 전달받은
+    states를 in-place mutate하므로, 세션 원본을 그대로 재사용하면 두 번째 호출의 "0시
+    시작" 상태가 첫 번째 호출의 "마지막 시간 결과"로 오염돼 타임라인이 리런마다 드리프트
+    한다. monitor.py는 매 렌더 `deepcopy(states)`로 시뮬용 사본을 분리해 세션 states는
+    항상 default_states() 그대로 유지한다 — 이 테스트는 그 패턴으로 동일 입력 2회 호출 시
+    타임라인이 완전히 동일함을 검증한다."""
+    from copy import deepcopy
+
+    baseline = _baseline({h: (30.0, 70.0) for h in range(6)})  # 밴드 상한 초과 지속 — 장치 ON 유발
+    session_states = default_states()
+
+    sim_states_1 = deepcopy(session_states)
+    timeline_1 = live.simulate_control(baseline, _sp(), sim_states_1, date="2026-07-03")
+
+    # 세션 원본(session_states)은 첫 호출로 오염되지 않아야 한다.
+    assert all(not s.on for s in session_states.values())
+
+    sim_states_2 = deepcopy(session_states)
+    timeline_2 = live.simulate_control(baseline, _sp(), sim_states_2, date="2026-07-03")
+
+    def _strip(timeline):
+        return [{k: v for k, v in item.items() if k != "events"} for item in timeline]
+
+    assert _strip(timeline_1) == _strip(timeline_2)
+
+
+def test_simulate_control_without_deepcopy_drifts_across_calls():
+    """대조군 — deepcopy 없이 같은 states 객체를 재사용하면(수정 전 버그) 직전 호출이 장치를
+    ON으로 남긴 채 끝난 뒤, 그 상태를 이어받아 재실행하면 히스테리시스 데드밴드 때문에
+    "0시부터 밴드 정상 범위"인 새 타임라인의 첫 시간조차 잘못 ON으로 판정된다."""
+    hot_baseline = _baseline({h: (30.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
+    normal_baseline = _baseline({h: (24.7, 70.0) for h in range(3)})  # 데드밴드(24.5) 안쪽, 밴드 자체는 정상
+
+    states_fresh = default_states()
+    fresh_timeline = live.simulate_control(normal_baseline, _sp(), states_fresh, date="2026-07-03")
+    assert fresh_timeline[0]["devices_on"] == []  # 새 states로 시작하면 정상 범위라 OFF
+
+    states_polluted = default_states()
+    live.simulate_control(hot_baseline, _sp(), states_polluted, date="2026-07-03")
+    assert states_polluted["cooling_fan"].on  # 직전 호출로 오염 — ON 상태로 남음
+
+    polluted_timeline = live.simulate_control(normal_baseline, _sp(), states_polluted, date="2026-07-03")
+    # 같은 normal_baseline인데 오염된 states로 재실행하면 첫 시간 devices_on이 fresh와 달라진다
+    # (데드밴드 안쪽이라 was_high=True 이력이 남은 fan이 계속 ON으로 판정됨) — 회귀 재현.
+    assert polluted_timeline[0]["devices_on"] != fresh_timeline[0]["devices_on"]
+
+
 # ── run_notify — 상태 파일 dedup ─────────────────────────────────────────
 @pytest.fixture
 def _isolated_state(tmp_path, monkeypatch):
