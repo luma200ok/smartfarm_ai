@@ -202,17 +202,10 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
     # 갱신되며 드리프트한다(run_notify는 같은 날 여러 번 호출되는 진입점이라 dedup·멱등성이
     # 깨짐). 자정 연속성은 "어제 마지막 값 → 오늘 0시" 전환에서만 의미가 있으므로 어제로 제한.
     seed_temp = seed_hum = None
-    if initial_ctrl:
-        ic_date = initial_ctrl.get("date")
-        yesterday_str = None
-        try:
-            from datetime import timedelta
-            d = date if hasattr(date, "isoformat") and not isinstance(date, str) else None
-            if d is not None:
-                yesterday_str = (d - timedelta(days=1)).isoformat()
-        except (TypeError, ValueError):
-            yesterday_str = None
-        if yesterday_str is not None and ic_date == yesterday_str:
+    if initial_ctrl and isinstance(date, _date):
+        from datetime import timedelta
+        yesterday_str = (date - timedelta(days=1)).isoformat()
+        if initial_ctrl.get("date") == yesterday_str:
             seed_temp = initial_ctrl.get("temp")
             seed_hum = initial_ctrl.get("hum")
 
@@ -337,6 +330,13 @@ def _load_state() -> dict:
             return json.load(f)
     except (json.JSONDecodeError, OSError):
         return {}
+
+
+def load_last_ctrl() -> "dict | None":
+    """상태 파일에서 last_ctrl(직전 실행의 "제어 후" 값 시드)만 공개 API로 노출한다 —
+    호출부(app/views/monitor.py 등)가 내부 상태 파일 포맷(_load_state())에 직접
+    결합되지 않도록(이슈 #35 리뷰 P3). 읽기 실패해도 예외 전파 없이 None."""
+    return _load_state().get("last_ctrl")
 
 
 def _save_state(state: dict) -> None:

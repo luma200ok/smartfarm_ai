@@ -110,3 +110,79 @@ def test_split_events_all_done_or_all_planned():
 
     done2, planned2 = monitor_mod._split_events(items, now_hour=-1)
     assert done2 == [] and len(planned2) == 2
+
+
+# ── _split_control_segments — 실행/계획 분리(이슈 #35 리뷰 P2) ──────────────
+def _long_df(hours, value_cols):
+    """{hour: {col: val, ...}, ...} → melt된 {hour,구분,값} DataFrame."""
+    import pandas as pd
+    rows = [{"hour": h, **vals} for h, vals in hours.items()]
+    df = pd.DataFrame(rows)
+    return df.melt(id_vars=["hour"], value_vars=value_cols, var_name="구분", value_name="값")
+
+
+def test_split_control_segments_now_hour_shared_by_both_segments():
+    """now_hour(=2) 데이터 포인트가 실행/계획 양쪽 세그먼트에 공유돼(hour<=now, hour>=now)
+    선이 끊기지 않고 이어진다."""
+    monitor_mod = _import_monitor_module()
+    value_cols = ["외기", "제어 후"]
+    long_df = _long_df({h: {"외기": 20.0, "제어 후": 21.0 + h} for h in range(5)}, value_cols)
+    out_df, _domain, _range = monitor_mod._split_control_segments(long_df, value_cols, "제어 후", now_hour=2)
+
+    exec_rows = out_df[out_df["구분"] == "제어 후(실행)"]
+    planned_rows = out_df[out_df["구분"] == "제어 후(계획)"]
+    assert sorted(exec_rows["hour"].tolist()) == [0, 1, 2]      # hour<=now_hour
+    assert sorted(planned_rows["hour"].tolist()) == [2, 3, 4]   # hour>=now_hour
+    # now_hour(2) 값이 양쪽에 동일하게 존재(끊김 없이 이어짐)
+    assert exec_rows[exec_rows["hour"] == 2]["값"].iloc[0] == pytest.approx(23.0)
+    assert planned_rows[planned_rows["hour"] == 2]["값"].iloc[0] == pytest.approx(23.0)
+    # 분리 대상이 아닌 계열("외기")은 원래 이름 그대로, 전체 hour 보유
+    assert set(out_df[out_df["구분"] == "외기"]["hour"]) == {0, 1, 2, 3, 4}
+
+
+def test_split_control_segments_boundary_now_hour_zero_and_last():
+    """경계: now_hour=0이면 실행은 hour 0 하나뿐, 계획은 전체(0~N)."""
+    monitor_mod = _import_monitor_module()
+    value_cols = ["제어 후"]
+    long_df = _long_df({h: {"제어 후": 20.0 + h} for h in range(4)}, value_cols)
+    out_df, _domain, _range = monitor_mod._split_control_segments(long_df, value_cols, "제어 후", now_hour=0)
+    exec_rows = out_df[out_df["구분"] == "제어 후(실행)"]
+    planned_rows = out_df[out_df["구분"] == "제어 후(계획)"]
+    assert sorted(exec_rows["hour"].tolist()) == [0]
+    assert sorted(planned_rows["hour"].tolist()) == [0, 1, 2, 3]
+
+    # now_hour이 마지막 시간이면 계획은 그 시간 하나뿐, 실행은 전체
+    out_df2, _, _ = monitor_mod._split_control_segments(long_df, value_cols, "제어 후", now_hour=3)
+    exec_rows2 = out_df2[out_df2["구분"] == "제어 후(실행)"]
+    planned_rows2 = out_df2[out_df2["구분"] == "제어 후(계획)"]
+    assert sorted(exec_rows2["hour"].tolist()) == [0, 1, 2, 3]
+    assert sorted(planned_rows2["hour"].tolist()) == [3]
+
+
+def test_split_control_segments_color_domain_range_length_matches():
+    """범례 domain/range 길이가 항상 일치하고, split_col은 실행/계획 두 항목으로 대체되며
+    같은 base_color를 공유한다(strokeDash로만 구분, 색은 유지)."""
+    monitor_mod = _import_monitor_module()
+    value_cols = ["외기", "제어 전(기준선)", "제어 후"]
+    long_df = _long_df({h: {c: 20.0 for c in value_cols} for h in range(3)}, value_cols)
+    out_df, domain, color_range = monitor_mod._split_control_segments(long_df, value_cols, "제어 후", now_hour=1)
+
+    assert len(domain) == len(color_range)
+    assert len(domain) == len(value_cols) + 1  # split_col 1개가 실행/계획 2개로 대체(+1)
+    assert "제어 후(실행)" in domain and "제어 후(계획)" in domain
+    assert "제어 후" not in domain
+    idx_exec = domain.index("제어 후(실행)")
+    idx_planned = domain.index("제어 후(계획)")
+    assert color_range[idx_exec] == color_range[idx_planned]  # 같은 base_color 공유
+    assert set(out_df["구분"].unique()) == {"외기", "제어 전(기준선)", "제어 후(실행)", "제어 후(계획)"}
+
+
+def test_split_control_segments_no_split_col_returns_unchanged():
+    """split_col=None이면 long_df·domain·range가 원본 그대로(변경 없음)."""
+    monitor_mod = _import_monitor_module()
+    value_cols = ["외기", "제어 후"]
+    long_df = _long_df({h: {c: 20.0 for c in value_cols} for h in range(2)}, value_cols)
+    out_df, domain, color_range = monitor_mod._split_control_segments(long_df, value_cols, None, now_hour=1)
+    assert domain == value_cols
+    assert len(domain) == len(color_range)
+    assert list(out_df["구분"].unique()) == value_cols

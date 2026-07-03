@@ -375,6 +375,39 @@ def render_discord_settings():
 _TREND_PALETTE = ["#1f77b4", "#7f7f7f", "#d62728", "#2ca02c", "#9467bd"]
 
 
+def _split_control_segments(long_df, value_cols: list, split_col: "str | None", now_hour: int):
+    """실행/계획 세그먼트 분리(이슈 #35) — _live_trend_chart()에서 추출한 순수 로직
+    (altair 비의존, 단위 테스트 가능). long_df는 melt된 {hour,구분,값} DataFrame.
+
+    split_col이 value_cols에 있으면 해당 계열을 now_hour 기준 두 세그먼트로 나눈다 —
+    "{split_col}(실행)"은 hour<=now_hour, "{split_col}(계획)"은 hour>=now_hour(now
+    포인트를 양쪽이 공유해 선이 끊기지 않고 이어짐). color_domain/color_range는 같은
+    길이로 반환하며, 분리된 두 계열은 원래 색(base_color)을 그대로 공유한다(strokeDash로만
+    구분 — 범례 색은 유지, 선 종류만 실행/계획으로 나뉨).
+
+    반환: (long_df, color_domain, color_range) — split_col 미해당이면 원본 그대로."""
+    color_domain = list(value_cols)
+    color_range = [_TREND_PALETTE[i % len(_TREND_PALETTE)] for i in range(len(value_cols))]
+
+    if not split_col or split_col not in value_cols:
+        return long_df, color_domain, color_range
+
+    base_color = color_range[value_cols.index(split_col)]
+    exec_name, planned_name = f"{split_col}(실행)", f"{split_col}(계획)"
+    mask = long_df["구분"] == split_col
+    exec_df = long_df[~mask | (long_df["hour"] <= now_hour)].copy()
+    exec_df.loc[exec_df["구분"] == split_col, "구분"] = exec_name
+    planned_df = long_df[mask & (long_df["hour"] >= now_hour)].copy()
+    planned_df["구분"] = planned_name
+
+    import pandas as pd
+    long_df = pd.concat([exec_df, planned_df], ignore_index=True)
+    color_domain = [c for c in value_cols if c != split_col] + [exec_name, planned_name]
+    color_range = [c for c, orig in zip(color_range, value_cols) if orig != split_col] + \
+        [base_color, base_color]
+    return long_df, color_domain, color_range
+
+
 def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now_hour: int,
                        split_col: str | None = None):
     """오늘 0~24시 추이 차트(이슈 #25 사용자 추가 요청, 미래 구간 점선화는 이슈 #35) —
@@ -382,9 +415,9 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
     구간을 시각적으로 구분한다.
 
     split_col이 주어지면 해당 계열(예: "제어 후")을 now_hour 기준 두 세그먼트로 나눈다 —
-    "{split_col}(실행)"은 hour<=now_hour 실선, "{split_col}(계획)"은 hour>=now_hour(now
-    포인트 공유로 이어짐) 점선. 색은 같은 계열을 유지하고 strokeDash로만 구분해 이벤트
-    표(실행/🔮예정)와 시각적으로 일치시킨다."""
+    실행/계획 분리 로직 자체는 _split_control_segments()로 분리(단위 테스트는 그쪽 참조).
+    색은 같은 계열을 유지하고 strokeDash로만 구분해 이벤트 표(실행/🔮예정)와 시각적으로
+    일치시킨다."""
     import altair as alt
     import pandas as pd
 
@@ -396,22 +429,7 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
     ).encode(x=alt.X("start:Q", scale=alt.Scale(domain=[0, max_hour])), x2="end:Q")
 
     long_df = df.melt(id_vars=["hour"], value_vars=value_cols, var_name="구분", value_name="값")
-
-    color_domain = list(value_cols)
-    color_range = [_TREND_PALETTE[i % len(_TREND_PALETTE)] for i in range(len(value_cols))]
-
-    if split_col and split_col in value_cols:
-        base_color = color_range[value_cols.index(split_col)]
-        exec_name, planned_name = f"{split_col}(실행)", f"{split_col}(계획)"
-        mask = long_df["구분"] == split_col
-        exec_df = long_df[~mask | (long_df["hour"] <= now_hour)].copy()
-        exec_df.loc[exec_df["구분"] == split_col, "구분"] = exec_name
-        planned_df = long_df[mask & (long_df["hour"] >= now_hour)].copy()
-        planned_df["구분"] = planned_name
-        long_df = pd.concat([exec_df, planned_df], ignore_index=True)
-        color_domain = [c for c in value_cols if c != split_col] + [exec_name, planned_name]
-        color_range = [c for c, orig in zip(color_range, value_cols) if orig != split_col] + \
-            [base_color, base_color]
+    long_df, color_domain, color_range = _split_control_segments(long_df, value_cols, split_col, now_hour)
 
     long_df["_선"] = long_df["구분"].apply(lambda v: "계획" if v.endswith("(계획)") else "실행")
     # 기준선 계열은 얇게/반투명, 그 외(제어 후 등)는 굵게 — 교차 구간 가독성(이슈 #35 C3)
@@ -477,7 +495,7 @@ def render_live_tab(setpoints):
     sim_states = deepcopy(states)
     # 자정 연속성(이슈 #35) — run_notify()가 남긴 상태 파일의 last_ctrl을 시드로 이어받아
     # 앱·타이머 양쪽이 같은 0시 시작값을 쓰게 맞춘다(읽기 실패해도 예외 전파 없이 폴백).
-    initial_ctrl = live_mod._load_state().get("last_ctrl")
+    initial_ctrl = live_mod.load_last_ctrl()
     timeline = live_mod.simulate_control(baseline, setpoints, sim_states, date=today,
                                           initial_ctrl=initial_ctrl, fallback_clamp=True)
     emg = live_mod.emergency_hours(timeline, setpoints)
