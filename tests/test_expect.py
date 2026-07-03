@@ -36,6 +36,24 @@ def test_predict_returns_targets_and_sigma():
     assert out == {"평균": 15.0, "최저": 10.0, "resid_sigma": {"평균": 1.4, "최저": 1.9}}
 
 
+def test_predict_includes_humidity_when_model_has_it():
+    """이슈 #37 — model["models"]에 "습도" 키가 있으면 predict() 반환에도 그대로 포함된다
+    (구모델은 습도 키가 없어 기존처럼 "평균"/"최저"만 반환 — 하위호환)."""
+    model = _fake_model()
+    model["models"]["습도"] = _FakeReg(65.0)
+    model["resid_sigma"]["습도"] = 5.0
+    out = expect.predict(model, {"온도외부_평균": 5.0, "일사량_평균": 3.0}, "2024-01-15")
+    assert out["습도"] == 65.0
+    assert out["resid_sigma"]["습도"] == 5.0
+
+
+def test_predict_no_humidity_key_when_model_lacks_it():
+    """구버전 pkl(습도 타깃 없음) — 반환에 "습도" 키가 없어야 한다."""
+    model = _fake_model()
+    out = expect.predict(model, {"온도외부_평균": 5.0, "일사량_평균": 3.0}, "2024-01-15")
+    assert "습도" not in out
+
+
 def test_predict_none_when_reading_missing_feature():
     model = _fake_model()
     assert expect.predict(model, {"온도외부_평균": 5.0}, "2024-01-15") is None

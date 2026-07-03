@@ -100,8 +100,10 @@ def indoor_baseline(outdoor: "list[dict]", date=None) -> "list[dict]":
 
     일사량은 시간별 실측이 없어 주간(07~18시)=학습 데이터 doy 계절 평균
     (model["doy_solar_climatology"]), 야간=0으로 근사해 predict()에 넣는다.
-    내부 습도 기준선은 외기 습도 + INDOOR_HUMIDITY_OFFSET(온실 보습 보정, 상수)로 단순
-    근사한다 — 둘 다 정밀 물리 모델이 아니라 대시보드용 근사치임에 유의.
+    내부 습도 기준선(이슈 #37)은 모델 payload에 "습도" 타깃이 있으면 predict() 결과를
+    그대로 사용하고, 없으면(구버전 pkl) 기존 폴백 — 외기 습도 + INDOOR_HUMIDITY_OFFSET
+    (온실 보습 보정, 상수)로 단순 근사한다 — 어느 쪽이든 정밀 물리 모델이 아니라
+    대시보드용 근사치임에 유의.
     기대값 모델(pkl) 미배포 시 base_temp는 외기 온도 그대로 폴백한다.
     """
     from llm import expect as expect_mod
@@ -125,7 +127,9 @@ def indoor_baseline(outdoor: "list[dict]", date=None) -> "list[dict]":
         base_temp = exp["평균"] if exp else temp
 
         base_hum = None
-        if humidity is not None:
+        if exp and "습도" in exp:
+            base_hum = max(0.0, min(exp["습도"], 100.0))
+        elif humidity is not None:
             base_hum = min(humidity + INDOOR_HUMIDITY_OFFSET, 100.0)
 
         baseline.append({
@@ -189,7 +193,7 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
     반대 장치가 즉시 켜지는 교대 진동을 막는다. 기존 물리 클램프(base±CTRL_TEMP_BAND℃·
     습도 0~100%)는 그대로 유지(비현실적 발산 방지).
 
-    반환: [{hour, out_temp, base_temp, ctrl_temp, base_hum, ctrl_hum, devices_on, events}]
+    반환: [{hour, out_temp, base_temp, ctrl_temp, out_hum, base_hum, ctrl_hum, devices_on, events}]
     (events = 그 시간대에 발생한 ControlLog 목록).
     """
     from control import controller
@@ -241,7 +245,8 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
 
         timeline.append({
             "hour": item["hour"], "out_temp": item["out_temp"], "base_temp": item["base_temp"],
-            "ctrl_temp": ctrl_temp, "base_hum": item["base_hum"], "ctrl_hum": ctrl_hum,
+            "ctrl_temp": ctrl_temp, "out_hum": item.get("out_hum"),
+            "base_hum": item["base_hum"], "ctrl_hum": ctrl_hum,
             "devices_on": devices_on, "events": logs,
         })
 
@@ -365,6 +370,15 @@ def _emergency_embed(hour_item: dict, date_str: str) -> dict:
                        {"name": "사유", "value": hour_item["reason"]}]}
 
 
+def _forecast_alert_embed(hour_items: "list[dict]", date_str: str) -> dict:
+    """미래 시간대 사전 경보(이슈 #38 A안) — 여러 시간대를 1건 embed로 요약해 스팸을
+    줄인다. hour_items는 hour 오름차순으로 넘겨야 fields 순서가 시간순이 된다."""
+    fields = [{"name": f"{date_str} {item['hour']:02d}시", "value": item["reason"]}
+              for item in hour_items]
+    return {"title": "🔮 오늘 운영 — 사전 경보(예보 기반 예상)", "color": 15105642,
+            "fields": fields}
+
+
 def _kma_unavailable_embed(reason: str, date_str: str) -> dict:
     return {"title": "⚠️ 오늘 운영 — KMA 조회 실패", "color": 15105570,
             "fields": [{"name": "일시", "value": date_str, "inline": True},
@@ -441,10 +455,23 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
             sent += 1
 
     prev_emg_keys = set(prev_state.get("emergency_hours", [])) if same_day else set()
+    # cur_emg_keys는 emg 전체(현재/미래/과거 불문)로 만든다 — 과거 시간대는 발송하지
+    # 않아도 상태 키에는 남겨야 재발송(뒷북)을 막을 수 있다(이슈 #38 A안).
     cur_emg_keys = {_emergency_key(item) for item in emg}
     new_emg = [item for item in emg if _emergency_key(item) not in prev_emg_keys]
-    for item in new_emg:
+
+    # 시점별 분기(이슈 #38 A안): 현재 시각(hour==now_hour)만 즉시 "🚨 긴급", 미래
+    # (hour>now_hour)는 "🔮 사전 경보"로 묶어 1건만 발송, 과거(hour<now_hour)는 뒷북이라
+    # 발송하지 않는다(단, 위에서 cur_emg_keys에는 이미 포함돼 재판정을 막는다).
+    current_emg = [item for item in new_emg if item["hour"] == now_hour]
+    future_emg = sorted((item for item in new_emg if item["hour"] > now_hour),
+                         key=lambda item: item["hour"])
+
+    for item in current_emg:
         if _emit(_emergency_embed(item, date_str)):
+            sent += 1
+    if future_emg:
+        if _emit(_forecast_alert_embed(future_emg, date_str)):
             sent += 1
 
     last_ctrl = ({"date": date_str, "hour": cur_item["hour"], "temp": cur_item["ctrl_temp"],
