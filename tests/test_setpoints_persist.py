@@ -1,7 +1,8 @@
 """설정 밴드 영속화(저장/로드) 테스트 — 이슈 #21."""
 import json
 
-from control.setpoints import Setpoints, load, save
+import control.setpoints as setpoints_mod
+from control.setpoints import Setpoints, load, save, save_changed
 
 
 def test_save_load_roundtrip(tmp_path):
@@ -73,3 +74,44 @@ def test_save_writes_atomically_no_leftover_tmp(tmp_path):
     assert not tmp_file.exists()
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["temp_low"] == Setpoints().temp_low
+
+
+def test_save_write_failure_is_swallowed(tmp_path, monkeypatch):
+    """P2-1: os.replace가 OSError를 던져도 save()는 예외 없이 반환한다."""
+    path = tmp_path / "sp.json"
+
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(setpoints_mod.os, "replace", _boom)
+    save(Setpoints(), path)  # 예외 없이 반환되어야 함
+    assert not path.exists()
+
+
+def test_save_changed_merges_concurrent_session_edits(tmp_path):
+    """P2-2: 세션 B가 습도를 먼저 저장한 뒤, 세션 A가 온도만 바꿔 저장하면
+    파일에는 두 변경(온도+습도)이 모두 남아야 한다(lost-update 방지)."""
+    path = tmp_path / "sp.json"
+    base = Setpoints()
+    save(base, path)
+
+    # 세션 B: 습도만 변경 후 저장
+    b_prev = load(path)
+    b_now = Setpoints(**{**b_prev.__dict__, "hum_low": 50.0, "hum_high": 95.0})
+    save_changed(b_now, b_prev, path)
+
+    # 세션 A: 자신의 stale 스냅샷(base) 기준으로 온도만 변경
+    a_prev = base
+    a_now = Setpoints(**{**a_prev.__dict__, "temp_low": 15.0, "temp_high": 30.0})
+    merged = save_changed(a_now, a_prev, path)
+
+    assert merged.temp_low == 15.0
+    assert merged.temp_high == 30.0
+    assert merged.hum_low == 50.0
+    assert merged.hum_high == 95.0
+
+    on_disk = load(path)
+    assert on_disk.temp_low == 15.0
+    assert on_disk.temp_high == 30.0
+    assert on_disk.hum_low == 50.0
+    assert on_disk.hum_high == 95.0
