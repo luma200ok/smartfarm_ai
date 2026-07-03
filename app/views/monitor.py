@@ -130,7 +130,10 @@ def _reset_control_state_for_year(year):
 
 
 def _get_device_states(year):
-    if st.session_state.get(K_CONTROL_YEAR) != year:
+    from control.actuators import DEVICES
+    stale_keys = (K_DEVICE_STATES in st.session_state
+                  and set(st.session_state[K_DEVICE_STATES]) != set(DEVICES))
+    if st.session_state.get(K_CONTROL_YEAR) != year or stale_keys:
         _reset_control_state_for_year(year)
     return st.session_state[K_DEVICE_STATES]
 
@@ -226,12 +229,17 @@ def render_setpoints(setpoints):
 def _get_live_device_states():
     """오늘 운영 탭 전용 장치 상태(이슈 #25) — 시뮬용 K_DEVICE_STATES와 분리 보관.
 
-    자정이 지나 날짜가 바뀌면 새로 초기화(전날 수동 오버라이드가 새 하루로 넘어가지 않도록)."""
-    from control.actuators import default_states
+    자정이 지나 날짜가 바뀌면 새로 초기화(전날 수동 오버라이드가 새 하루로 넘어가지 않도록).
+    이슈 #27: 장치 구성이 바뀌면(예: 서버 재기동 없이 세션만 남아 옛 vent 키가 남는 경우)
+    키셋이 DEVICES와 다를 때도 방어적으로 리셋한다."""
+    from control.actuators import DEVICES, default_states
 
     today = _date.today()
+    stale_keys = (K_LIVE_DEVICE_STATES in st.session_state
+                  and set(st.session_state[K_LIVE_DEVICE_STATES]) != set(DEVICES))
     if (K_LIVE_DEVICE_STATES not in st.session_state
-            or st.session_state.get("_live_device_states_date") != today):
+            or st.session_state.get("_live_device_states_date") != today
+            or stale_keys):
         st.session_state[K_LIVE_DEVICE_STATES] = default_states()
         st.session_state["_live_device_states_date"] = today
     return st.session_state[K_LIVE_DEVICE_STATES]

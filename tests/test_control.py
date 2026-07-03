@@ -16,27 +16,23 @@ def _reading(temp=22.0, hum=70.0):
 
 
 # ── controller.decide — 경계값 ──────────────────────────────────────────
-def test_temp_above_high_turns_on_cooling_and_vent_heater_off():
+def test_temp_above_high_turns_on_cooling_heater_off():
     states = default_states()
     states["heater"].on = True  # 이전에 켜져 있던 히터도 강제 OFF 확인
     logs = decide(_reading(temp=26.0), _sp(), states, date="2024-01-01")
     assert states["cooling_fan"].on is True
-    assert states["vent"].on is True
     assert states["heater"].on is False
     actions = {log.device: log.action for log in logs}
     assert actions["cooling_fan"] == "ON"
-    assert actions["vent"] == "ON"
     assert actions["heater"] == "OFF"
 
 
-def test_temp_below_low_turns_on_heater_and_off_cooling_vent():
+def test_temp_below_low_turns_on_heater_and_off_cooling():
     states = default_states()
     states["cooling_fan"].on = True
-    states["vent"].on = True
     logs = decide(_reading(temp=19.0), _sp(), states, date="2024-01-01")
     assert states["heater"].on is True
     assert states["cooling_fan"].on is False
-    assert states["vent"].on is False
     assert any(log.device == "heater" and log.action == "ON" for log in logs)
 
 
@@ -48,11 +44,11 @@ def test_temp_within_band_no_temp_device_change():
     assert logs == []  # 이미 OFF 상태 유지 → 로그 없음
 
 
-def test_hum_above_high_turns_on_vent():
+def test_hum_above_high_turns_on_dehumidifier():
     states = default_states()
     logs = decide(_reading(temp=22.0, hum=90.0), _sp(), states, date="2024-01-01")
-    assert states["vent"].on is True
-    assert any(log.device == "vent" and log.action == "ON" for log in logs)
+    assert states["dehumidifier"].on is True
+    assert any(log.device == "dehumidifier" and log.action == "ON" for log in logs)
 
 
 def test_hum_below_low_turns_on_humidifier():
@@ -102,6 +98,15 @@ def test_heater_and_cooling_never_both_on():
     assert not (states["cooling_fan"].on and states["heater"].on)
 
 
+# ── 충돌 금지: dehumidifier/humidifier 동시 ON 금지(이슈 #27) ────────────
+def test_dehumidifier_and_humidifier_never_both_on():
+    states = default_states()
+    decide(_reading(hum=95.0), _sp(), states, date="d1")
+    assert not (states["dehumidifier"].on and states["humidifier"].on)
+    decide(_reading(hum=10.0), _sp(), states, date="d2")
+    assert not (states["dehumidifier"].on and states["humidifier"].on)
+
+
 # ── 효과 피드백 ─────────────────────────────────────────────────────────
 class _FakeVS:
     """VirtualSensor.inject() 만 필요한 최소 더블."""
@@ -121,7 +126,7 @@ def test_apply_effects_only_for_on_devices():
     features = {c[0] for c in vs.calls}
     assert "온도내부_평균" in features
     assert all(c[3] > 0 for c in vs.calls if c[0] == "온도내부_평균")  # heater=+delta
-    # cooling_fan/vent/humidifier 는 OFF → 호출 없음
+    # cooling_fan/dehumidifier/humidifier 는 OFF → 호출 없음
     assert len(vs.calls) == len(set(vs.calls))
 
 
@@ -136,7 +141,6 @@ def test_apply_effects_off_device_no_injection():
 def test_emergency_none_when_less_than_3_ticks():
     states = default_states()
     states["cooling_fan"].on = True
-    states["vent"].on = True
     readings = [_reading(temp=30.0)] * 2
     to_send, keys = emergency(readings, _sp(), states)
     assert to_send == [] and keys == set()
@@ -145,7 +149,6 @@ def test_emergency_none_when_less_than_3_ticks():
 def test_emergency_triggers_after_3_consecutive_ticks_full_power():
     states = default_states()
     states["cooling_fan"].on = True
-    states["vent"].on = True
     readings = [_reading(temp=30.0)] * 3
     to_send, keys = emergency(readings, _sp(), states)
     assert len(to_send) == 1
@@ -156,8 +159,7 @@ def test_emergency_triggers_after_3_consecutive_ticks_full_power():
 
 def test_emergency_none_when_device_not_full_power():
     states = default_states()
-    states["cooling_fan"].on = True
-    states["vent"].on = False  # 풀가동 아님
+    states["cooling_fan"].on = False  # 풀가동 아님
     readings = [_reading(temp=30.0)] * 3
     to_send, keys = emergency(readings, _sp(), states)
     assert to_send == [] and keys == set()
@@ -176,7 +178,6 @@ def test_emergency_temp_high_and_low_use_distinct_keys():
 def test_emergency_dedup_suppresses_repeat_while_condition_persists():
     states = default_states()
     states["cooling_fan"].on = True
-    states["vent"].on = True
     readings = [_reading(temp=30.0)] * 3
     to_send, active = emergency(readings, _sp(), states)
     assert len(to_send) == 1
@@ -191,7 +192,6 @@ def test_emergency_self_cleaning_resends_after_condition_recurs():
     add-only active set이 영구 억제하던 버그 회귀 확인)."""
     states = default_states()
     states["cooling_fan"].on = True
-    states["vent"].on = True
     hot = [_reading(temp=30.0)] * 3
     to_send, active = emergency(hot, _sp(), states)
     assert len(to_send) == 1
@@ -205,19 +205,6 @@ def test_emergency_self_cleaning_resends_after_condition_recurs():
     to_send3, active3 = emergency(hot, _sp(), states, active=active2)
     assert len(to_send3) == 1
     assert active3 == {"control_limit:temp_high:경고"}
-
-
-# ── P2-2: vent 공유 히스테리시스 — 온도 사유 vent가 습도 데드밴드 유지로 오인되지 않음 ──
-def test_vent_temp_cause_does_not_pollute_hum_hysteresis():
-    states = default_states()
-    # 온도 상한 초과로 vent ON(cause=temp)
-    decide(_reading(temp=26.0, hum=70.0), _sp(), states, date="d1")
-    assert states["vent"].on is True and states["vent"].cause == "temp"
-
-    # 온도 정상 복귀 + 습도도 정상(80 미만) → 습도 사유 히스테리시스가 없어야 하므로 vent OFF
-    logs = decide(_reading(temp=22.0, hum=70.0), _sp(), states, date="d2")
-    assert states["vent"].on is False
-    assert any(log.device == "vent" and log.action == "OFF" for log in logs)
 
 
 # ── P1-1: 시나리오 재적용이 제어 효과 주입을 지우지 않음(실제 VirtualSensor) ──

@@ -1,7 +1,7 @@
 """오늘 운영 모드(이슈 #23) — KMA 외기 + 기대값 모델로 오늘 시간대별
 "제어 전 내부 기준선"과 "장치 효과가 반영된 제어 후 내부값"을 계산한다.
 
-규칙 기반(controller.decide()·effects.EFFECTS 재사용), LLM 호출 없음.
+규칙 기반(controller.decide()·effects.EFFECTS_HOURLY 재사용), LLM 호출 없음.
 run_notify()는 서버 타이머(1시간 간격, systemd timer)에서 호출되는 진입점 —
 장치 ON/OFF 전환·긴급·이상만 디스코드로 발송(상태 파일 dedup, 세션이 아니라
 파일 기반이라 앱·타이머 프로세스가 상태를 공유한다).
@@ -21,9 +21,11 @@ _log = logging.getLogger(__name__)
 
 STATE_PATH = ROOT / "data" / "control_live_state.json"
 
-# 장치 효과(effects.EFFECTS)는 "1일치 풀가동" 델타로 정의돼 있다 — 시간 단위 시뮬레이션에서는
-# 1시간 ON일 때 그 델타의 1/24만 반영되도록 나눈다(선형 근사, 정밀 열역학 모델 아님).
-HOURLY_EFFECT_DIVISOR = 24.0
+# 물리 클램프(이슈 #27) — 효과가 시간당 상수(EFFECTS_HOURLY)로 커진 만큼, 극단적인 연속
+# ON에도 ctrl_temp/ctrl_hum이 비현실적으로 발산하지 않도록 base 대비 편차를 제한한다.
+CTRL_TEMP_BAND = 10.0  # base_temp ± 이 범위(℃) 안에서만 ctrl_temp 허용
+CTRL_HUM_MIN = 0.0
+CTRL_HUM_MAX = 100.0
 
 # 실내 습도 기준선 근사 — 외기습도 + 온실 보습 보정(상수, 실측 아닌 근사치).
 INDOOR_HUMIDITY_OFFSET = 10.0
@@ -129,11 +131,22 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
     """시간 순 재생 — controller.decide() 재사용, ON 장치 효과(시간 환산)를 다음 시간
     내부값에 반영해 "제어 후" 내부온·습도를 산출한다.
 
+    제어 관성(누적) 방식(이슈 #27 리뷰 P2-1/2-2 픽스) — 매 시간 baseline으로 재기준하지
+    않고, 이전 제어 결과(ctrl_prev)에 외기 변화분(base_next-base_prev)과 장치 효과
+    (delta_hourly)를 더해 다음 값을 구한다. 가변 외기에서 매 시간 baseline으로 재기준하면
+    ①채터링(장치 ON→다음 시간 baseline이 낮아 즉시 OFF 판정) ②한 스텝에 밴드 반대쪽을
+    관통(냉방으로 temp_low 아래까지 내려가 heater ON — 교대 진동)하는 문제가 있었다.
+
+    한 스텝 관통 방지: 냉방/난방/제습/가습 ON 중에는 그 장치가 미는 방향의 반대쪽 데드밴드
+    경계(예: 냉방 중이면 temp_low+deadband)를 넘어가지 않도록 클램프한다 — 다음 스텝에서
+    반대 장치가 즉시 켜지는 교대 진동을 막는다. 기존 물리 클램프(base±CTRL_TEMP_BAND℃·
+    습도 0~100%)는 그대로 유지(비현실적 발산 방지).
+
     반환: [{hour, out_temp, base_temp, ctrl_temp, base_hum, ctrl_hum, devices_on, events}]
     (events = 그 시간대에 발생한 ControlLog 목록).
     """
     from control import controller
-    from control.effects import EFFECTS
+    from control.effects import EFFECTS_HOURLY
 
     date = date or datetime.now().date()
     timeline = []
@@ -156,17 +169,40 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None) -> "l
             "devices_on": devices_on, "events": logs,
         })
 
-        delta_temp = sum(EFFECTS.get(d, {}).get("온도내부_평균", 0.0) for d in devices_on) / HOURLY_EFFECT_DIVISOR
-        delta_hum = sum(EFFECTS.get(d, {}).get("습도내부_평균", 0.0) for d in devices_on) / HOURLY_EFFECT_DIVISOR
+        delta_temp = sum(EFFECTS_HOURLY.get(d, {}).get("온도내부_평균", 0.0) for d in devices_on)
+        delta_hum = sum(EFFECTS_HOURLY.get(d, {}).get("습도내부_평균", 0.0) for d in devices_on)
 
         next_base_temp = baseline[idx + 1]["base_temp"] if idx + 1 < len(baseline) else None
         next_base_hum = baseline[idx + 1]["base_hum"] if idx + 1 < len(baseline) else None
 
-        base_for_next_temp = next_base_temp if next_base_temp is not None else ctrl_temp
-        ctrl_temp = (base_for_next_temp + delta_temp) if base_for_next_temp is not None else None
+        if next_base_temp is not None:
+            base_drift_temp = next_base_temp - item["base_temp"]
+            candidate = ctrl_temp + base_drift_temp + delta_temp
+            # 물리 클램프(다음 base_temp ± CTRL_TEMP_BAND, 과도 발산 방지)를 먼저 적용하고,
+            # 관통 방지(데드밴드 경계)는 마지막에 적용해 항상 우선한다 — 외기가 급변해
+            # 물리 클램프가 관통 방지 경계보다 더 좁게 잡히는 극단적 케이스에서도 "냉방/난방
+            # 중엔 반대쪽 데드밴드를 넘지 않는다"는 안전 불변식이 깨지지 않도록 한다.
+            candidate = max(next_base_temp - CTRL_TEMP_BAND, min(next_base_temp + CTRL_TEMP_BAND, candidate))
+            if "cooling_fan" in devices_on:  # 냉방 중 — temp_low 데드밴드 경계 아래로 관통 금지
+                candidate = max(candidate, setpoints.temp_low + setpoints.temp_deadband)
+            if "heater" in devices_on:  # 난방 중 — temp_high 데드밴드 경계 위로 관통 금지
+                candidate = min(candidate, setpoints.temp_high - setpoints.temp_deadband)
+            ctrl_temp = candidate
+        else:
+            ctrl_temp = None
 
-        base_for_next_hum = next_base_hum if next_base_hum is not None else ctrl_hum
-        ctrl_hum = (base_for_next_hum + delta_hum) if base_for_next_hum is not None else None
+        if next_base_hum is not None:
+            base_drift_hum = next_base_hum - item["base_hum"]
+            candidate_hum = ctrl_hum + base_drift_hum + delta_hum
+            # 온도와 동일한 우선순위 — 물리 클램프 먼저, 관통 방지가 최종적으로 우선한다.
+            candidate_hum = max(CTRL_HUM_MIN, min(CTRL_HUM_MAX, candidate_hum))
+            if "dehumidifier" in devices_on:  # 제습 중 — hum_low 데드밴드 경계 아래로 관통 금지
+                candidate_hum = max(candidate_hum, setpoints.hum_low + setpoints.hum_deadband)
+            if "humidifier" in devices_on:  # 가습 중 — hum_high 데드밴드 경계 위로 관통 금지
+                candidate_hum = min(candidate_hum, setpoints.hum_high - setpoints.hum_deadband)
+            ctrl_hum = candidate_hum
+        else:
+            ctrl_hum = None
 
     return timeline
 
@@ -179,16 +215,16 @@ def emergency_hours(timeline: "list[dict]", setpoints) -> "list[dict]":
         hum = item["ctrl_hum"]
         devices_on = set(item["devices_on"])
         if temp is not None:
-            if temp > setpoints.temp_high and {"cooling_fan", "vent"} <= devices_on:
+            if temp > setpoints.temp_high and "cooling_fan" in devices_on:
                 out.append({"hour": item["hour"], "kind": "temp_high",
-                            "reason": f"제어 한계 초과 — 냉방·환기 풀가동에도 고온 지속({temp:.1f}℃)"})
+                            "reason": f"제어 한계 초과 — 냉방 풀가동에도 고온 지속({temp:.1f}℃)"})
             elif temp < setpoints.temp_low and "heater" in devices_on:
                 out.append({"hour": item["hour"], "kind": "temp_low",
                             "reason": f"제어 한계 초과 — 난방 풀가동에도 저온 지속({temp:.1f}℃)"})
         if hum is not None:
-            if hum > setpoints.hum_high and "vent" in devices_on:
+            if hum > setpoints.hum_high and "dehumidifier" in devices_on:
                 out.append({"hour": item["hour"], "kind": "hum_high",
-                            "reason": f"제어 한계 초과 — 환기 풀가동에도 고습 지속({hum:.1f}%)"})
+                            "reason": f"제어 한계 초과 — 제습기 풀가동에도 고습 지속({hum:.1f}%)"})
             elif hum < setpoints.hum_low and "humidifier" in devices_on:
                 out.append({"hour": item["hour"], "kind": "hum_low",
                             "reason": f"제어 한계 초과 — 가습 풀가동에도 저습 지속({hum:.1f}%)"})

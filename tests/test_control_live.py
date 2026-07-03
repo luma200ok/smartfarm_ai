@@ -97,7 +97,6 @@ def test_simulate_control_turns_on_device_when_over_band_and_moves_ctrl_toward_b
     # cooling_fan·vent가 즉시 ON 판정돼야 한다.
     assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)
     assert "cooling_fan" in timeline[0]["devices_on"]
-    assert "vent" in timeline[0]["devices_on"]
     later = timeline[-1]
     assert later["ctrl_temp"] < later["base_temp"]
 
@@ -121,15 +120,106 @@ def test_simulate_control_emergency_when_full_blast_cannot_recover():
     assert all("고온 지속" in e["reason"] for e in emg)
 
 
-def test_simulate_control_no_chattering_at_boundary():
-    # 정확히 밴드 상한(25.0)에 붙어있는 시퀀스 — 히스테리시스로 채터링(ON/OFF 반복) 없어야 함.
-    baseline = _baseline({0: (26.0, 70.0), 1: (24.8, 70.0), 2: (24.9, 70.0), 3: (24.7, 70.0)})
+def test_simulate_control_ctrl_temp_clamped_within_band(monkeypatch):
+    """물리 클램프(이슈 #27) — 극단적으로 낮은 base_temp(난방 지속)에도 ctrl_temp가
+    base_temp - CTRL_TEMP_BAND보다 아래로 발산하지 않아야 한다."""
+    baseline = _baseline({h: (-30.0, 70.0) for h in range(4)})
     states = default_states()
     timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    for item in timeline[1:]:
+        assert item["ctrl_temp"] >= -30.0 - live.CTRL_TEMP_BAND - 1e-9
+
+
+def test_simulate_control_ctrl_hum_clamped_0_100():
+    """제습기 지속 가동에도 ctrl_hum이 0% 아래로, 가습기 지속에도 100% 위로 발산하지 않는다."""
+    baseline_low = _baseline({h: (22.0, 0.5) for h in range(6)})
+    timeline_low = live.simulate_control(baseline_low, _sp(), default_states(), date="2026-07-03")
+    assert all(item["ctrl_hum"] >= 0.0 for item in timeline_low)
+
+    baseline_high = _baseline({h: (22.0, 99.5) for h in range(6)})
+    timeline_high = live.simulate_control(baseline_high, _sp(), default_states(), date="2026-07-03")
+    assert all(item["ctrl_hum"] <= 100.0 for item in timeline_high)
+
+
+def test_simulate_control_hum_converges_to_band_dramatic_effect():
+    """드라마틱 효과 검증(이슈 #27) — 고습 프로파일(외기 습도가 시간에 따라 낮아지는 하루
+    추이)에서 제습기 ON → ctrl_hum이 몇 시간 내 밴드(hum_high=85) 아래로 수렴한다."""
+    hums = {0: 95.0, 1: 90.0, 2: 85.0, 3: 80.0, 4: 75.0, 5: 70.0}
+    baseline = _baseline({h: (22.0, hums[h]) for h in range(6)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    assert "dehumidifier" in timeline[0]["devices_on"]
+    # 제습 효과(-8.0%p/h)로 몇 시간 내 밴드 상한(85%) 아래로 수렴해야 한다.
+    assert any(item["ctrl_hum"] < 85.0 for item in timeline[1:])
+
+
+def test_dehumidifier_and_humidifier_never_both_on_live():
+    from control import controller
+    states = default_states()
+    controller.decide({"온도내부_평균": 22.0, "습도내부_평균": 95.0}, _sp(), states, date="d1")
+    assert not (states["dehumidifier"].on and states["humidifier"].on)
+    controller.decide({"온도내부_평균": 22.0, "습도내부_평균": 30.0}, _sp(), states, date="d2")
+    assert not (states["dehumidifier"].on and states["humidifier"].on)
+
+
+def test_state_file_vent_key_backward_compat(monkeypatch, _isolated_state, _isolated_setpoints):
+    """상태 파일에 옛 vent 키가 남아 있어도 예외 없이 신규 장치 키(dehumidifier)로
+    재구성돼야 한다(이슈 #27)."""
+    from datetime import date
+    from llm import weather
+
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast({h: 22.0 for h in range(24)}, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+
+    stale = {"date": "2026-07-03", "fail_count": 0,
+             "devices": {"vent": True, "heater": False, "cooling_fan": False, "humidifier": False},
+             "emergency_hours": []}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(stale), encoding="utf-8")
+
+    sent = []
+    _patch_notify(monkeypatch, sent)
+
+    # 예외 없이 실행돼야 한다 — 옛 vent 키는 무시되고 신규 DEVICES 키셋으로 재구성.
+    live.run_notify(dry_run=False, today=date(2026, 7, 3))
+    state = json.loads(_isolated_state.read_text())
+    assert set(state["devices"]) == {"dehumidifier", "humidifier", "cooling_fan", "heater"}
+
+
+def test_simulate_control_no_chattering_with_variable_baseline():
+    """리뷰 P2-1 픽스 검증 — 가변 외기(밴드 경계 부근에서 ±1~1.5℃ 흔들림)에서도 제어
+    관성(누적) 방식 + 히스테리시스로 장치 ON/OFF 전환 횟수가 임계(3회) 이하여야 한다."""
+    base = 25.3  # 밴드 상한(25.0) 바로 위 — 경계 부근
+    swing = [1.5, -1.2, 1.3, -1.0, 1.4, -1.1, 1.2, -1.3, 1.1, -1.4]
+    hours_temp = {}
+    v = base
+    for h, s in enumerate(swing):
+        v = base + s
+        hours_temp[h] = v
+    baseline = _baseline({h: (t, 70.0) for h, t in hours_temp.items()})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
     on_flags = ["cooling_fan" in t["devices_on"] for t in timeline]
-    # 한 번 ON 되면(temp>25) 데드밴드(24.5) 안쪽으로 복귀하기 전까진 계속 ON 유지 —
-    # 24.8/24.9/24.7 모두 24.5보다 크므로 OFF로 전환되지 않아야 한다(채터링 없음).
-    assert on_flags == [True, True, True, True]
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 3
+
+
+def test_simulate_control_no_single_step_penetration_temp():
+    """리뷰 P2-1 픽스 검증 — 고온 시작(냉방 ON) 후 외기가 급락해도 한 스텝에 temp_low
+    아래로 관통해 heater가 즉시 켜지는 교대 진동이 없어야 한다(관통 방지 클램프)."""
+    # 45℃(냉방 ON 유발) → 다음 시간 -10℃로 급락(관통 시도).
+    baseline = _baseline({0: (45.0, 70.0), 1: (-10.0, 70.0), 2: (-10.0, 70.0)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+    assert "cooling_fan" in timeline[0]["devices_on"]
+    # 1시간 뒤(관통 방지 클램프 적용된 ctrl_temp) 값 자체가 temp_low+deadband 아래로
+    # 내려가지 않아야 하고, heater가 같은 스텝에서 곧바로 ON 되지 않아야 한다.
+    sp = _sp()
+    assert timeline[1]["ctrl_temp"] >= sp.temp_low + sp.temp_deadband - 1e-9
+    assert "heater" not in timeline[1]["devices_on"]
 
 
 def test_simulate_control_deterministic_when_states_deepcopied_between_calls():
@@ -163,7 +253,10 @@ def test_simulate_control_without_deepcopy_drifts_across_calls():
     """대조군 — deepcopy 없이 같은 states 객체를 재사용하면(수정 전 버그) 직전 호출이 장치를
     ON으로 남긴 채 끝난 뒤, 그 상태를 이어받아 재실행하면 히스테리시스 데드밴드 때문에
     "0시부터 밴드 정상 범위"인 새 타임라인의 첫 시간조차 잘못 ON으로 판정된다."""
-    hot_baseline = _baseline({h: (30.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
+    # 이슈 #27(제어 관성 방식) — 냉방 효과(-2.0℃/h)가 누적되므로 30℃로는 6시간 안에 밴드로
+    # 수렴해버려 fan이 자연히 OFF된다. 시종일관 ON 상태를 유지시키려면 충분히 높은 기준선(45℃)
+    # 이 필요하다(6시간 동안 2℃/h씩 내려가도 35℃로 여전히 밴드 상한 초과).
+    hot_baseline = _baseline({h: (45.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
     normal_baseline = _baseline({h: (24.7, 70.0) for h in range(3)})  # 데드밴드(24.5) 안쪽, 밴드 자체는 정상
 
     states_fresh = default_states()
