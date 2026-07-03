@@ -102,8 +102,8 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_diagnosis",
-            "description": "토마토 잎 사진을 진단한다. 잎이 아니면(과실·꽃·줄기·비식물) 진단 대신 차단 사유를 돌려준다. "
-                           "진단 클래스는 잎마름역병(late_blight)·잎곰팡이병(leaf_mold)·정상(normal)·황화잎말이바이러스(tylcv) 4종뿐.",
+            "description": "토마토 잎 사진을 진단한다(잎마름역병 late_blight/잎곰팡이병 leaf_mold/"
+                           "정상 normal/tylcv 4종). 잎이 아니면 진단 대신 차단 사유를 돌려준다.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -117,7 +117,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_detection",
-            "description": "토마토 잎 사진에서 병변 위치를 검출한다(YOLO). 병변 박스와 상/중/하 위치를 반환.",
+            "description": "토마토 잎 사진에서 병변 위치를 검출한다(YOLO). 병변 박스·상중하 위치 반환.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -131,8 +131,8 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_forecast",
-            "description": "환경 예측 — 다음날 내부온도(℃)·추세는 LSTM 예측값, 습도위험(높음/보통/낮음)은 최근 7일 습도 평균 기준이다. "
-                           "습도가 높으면 곰팡이병 위험이 커지므로 선제 처방(환기 등)에 활용한다. 파라미터 없음.",
+            "description": "환경 예측 — 다음날 내부온도(LSTM)·추세, 습도위험(최근 7일 습도 평균 기준). "
+                           "고습이면 곰팡이병 위험 커짐, 선제 처방(환기 등)에 활용. 파라미터 없음.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -140,8 +140,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "기상청(KMA) 외부 날씨를 조회한다. kind='current'면 현재 실황(기온·습도·강수), "
-                           "kind='forecast'(기본)면 3일 예보(날짜별 최저·최고기온, 시간별 기온·습도·강수확률·하늘상태)를 반환. "
+            "description": "기상청(KMA) 외부 날씨 조회. current=현재 실황, forecast(기본)=3일 예보. "
                            "날씨·외기·예보 질문에 사용한다.",
             "parameters": {
                 "type": "object",

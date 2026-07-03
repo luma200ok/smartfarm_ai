@@ -90,7 +90,7 @@ def daily_coach(window=None) -> Coach:
     fc = get_forecast(window)
     msg = [{"role": "system", "content": COACH_SYSTEM},
            {"role": "user", "content": f"오늘의 토마토 재배 코칭을 해줘.\n환경 예측: {_forecast_text(fc)}"}]
-    resp = ollama.chat(model=MODEL, messages=msg, format=Coach.model_json_schema())
+    resp = ollama.chat(model=MODEL, messages=msg, format=Coach.model_json_schema(), keep_alive="30m")
     try:
         return Coach.model_validate_json(resp["message"]["content"])
     except ValidationError as e:
@@ -110,7 +110,7 @@ def early_warning(window=None) -> Warning:
     msg = [{"role": "system", "content": WARN_SYSTEM},
            {"role": "user", "content": f"환경 예측: {_forecast_text(fc)}\n\n재배가이드 근거:\n{guide}\n\n"
                                         "이 조건에서 토마토 병해 조기경보를 판단해줘."}]
-    resp = ollama.chat(model=MODEL, messages=msg, format=Warning.model_json_schema())
+    resp = ollama.chat(model=MODEL, messages=msg, format=Warning.model_json_schema(), keep_alive="30m")
     try:
         w = Warning.model_validate_json(resp["message"]["content"])
         history.save_alert("early_warning", w.경보수준, w.위험병해, w.이유, w.model_dump())
@@ -130,7 +130,7 @@ def weather_qa(user_msg: str) -> str:
                 {"role": "user", "content": user_msg}]
     try:
         for _ in range(WEATHER_QA_MAX_ROUNDS):
-            resp = ollama.chat(model=MODEL, messages=messages, tools=WEATHER_QA_TOOL_SCHEMA)
+            resp = ollama.chat(model=MODEL, messages=messages, tools=WEATHER_QA_TOOL_SCHEMA, keep_alive="30m")
             msg = resp["message"]
             messages.append(msg)
             calls = msg.get("tool_calls") or []
@@ -151,7 +151,7 @@ def weather_qa(user_msg: str) -> str:
                 messages.append({"role": "tool", "tool_name": name,
                                  "content": json.dumps(result, ensure_ascii=False)})
         # 마지막 라운드까지 tool 호출만 반복된 경우 — 지금까지의 메시지로 최종 답 한 번 더 요청
-        final = ollama.chat(model=MODEL, messages=messages)
+        final = ollama.chat(model=MODEL, messages=messages, keep_alive="30m")
         content = (final["message"].get("content") or "").strip()
         return content or WEATHER_QA_UNAVAILABLE_MSG
     except Exception as e:

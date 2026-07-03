@@ -17,7 +17,7 @@ INDEX_PATH = CORPUS_DIR / ".rag_index.npz"
 
 
 def _embed(texts: list[str]) -> np.ndarray:
-    resp = ollama.embed(model=EMBED_MODEL, input=texts)
+    resp = ollama.embed(model=EMBED_MODEL, input=texts, keep_alive="30m")
     return np.asarray(resp["embeddings"], dtype="float32")
 
 

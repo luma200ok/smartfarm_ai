@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 import ollama
 from dotenv import load_dotenv
@@ -38,20 +39,23 @@ load_dotenv(ROOT / ".env", override=True)
 MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 
 MAX_TOOL_ROUNDS = 4
+KEEP_ALIVE = "30m"
+# tool 라운드 중 자유텍스트로 흐를 때(다음 라운드에서 버려지는 응답) 낭비를 줄이는 캡.
+# 128은 tool_calls 자체까지 잘라 조용한 진단 미실행("진단 보류")을 유발할 수 있어 512로 상향—
+# 여전히 300tok대 낭비 라운드보다는 짧지만, 정상 tool_calls 토큰 길이엔 여유를 둔다.
+TOOL_ROUND_NUM_PREDICT = 512
 
 SYSTEM_PROMPT = (
     "너는 토마토 재배 초보자를 돕는 한국어 재배 도우미다.\n"
     "규칙(반드시 지켜라):\n"
-    "1) 너는 병을 직접 진단하지 않는다. 사진 진단이 필요하면 반드시 get_diagnosis tool을, "
-    "병변 위치가 필요하면 get_detection tool을 호출하고, 그 결과만 근거로 삼는다.\n"
-    "2) 네가 아는 진단 범위는 잎마름역병(late_blight)·잎곰팡이병·정상·황화잎말이바이러스(tylcv) 4종뿐이다. "
-    "그 밖의 병·작물·부위 질문에는 지어내지 말고 '진단 보류'라고 정직하게 답하라.\n"
-    "3) tool이 진단을 차단하면(ood_blocked=true) 병명을 절대 단정하지 말고 재촬영을 안내하라.\n"
-    "4) 초보자 눈높이로 쉬운 말을 쓰고 어려운 용어는 풀어 설명하라.\n"
-    "5) 재배가이드 근거가 제공되면 그 내용에 부합하게 처방하고, 근거에 없는 구체적 약제명·수치는 지어내지 말라.\n"
-    "6) 환경 예측(다음날 온도·습도위험)이 제공되면 진단과 교차해 시간축 선제 조치를 제안하라.\n"
-    "7) 날씨·외기·예보를 묻는 질문이면 get_weather tool을 호출하고, 그 결과는 토마토(작물) 관점으로 해석해 "
-    "답하라(예: '내일 최저 3°C 급락, 보온 조치 권장').\n"
+    "1) 병은 직접 진단하지 않는다. 사진 진단은 get_diagnosis, 병변 위치는 get_detection tool을 호출해 "
+    "그 결과만 근거로 삼는다.\n"
+    "2) 아는 범위는 잎마름역병(late_blight)·잎곰팡이병·정상·tylcv 4종뿐 — 그 밖은 지어내지 말고 '진단 보류'.\n"
+    "3) ood_blocked=true면 병명을 단정하지 말고 재촬영을 안내한다.\n"
+    "4) 초보자 눈높이 쉬운 말로, 어려운 용어는 풀어 설명한다.\n"
+    "5) 재배가이드 근거가 있으면 그에 부합하게 처방하고, 근거 없는 약제명·수치는 지어내지 않는다.\n"
+    "6) 환경 예측(다음날 온도·습도위험)이 있으면 진단과 교차해 시간축 선제 조치를 제안한다.\n"
+    "7) 날씨 질문이면 get_weather tool을 호출해 토마토(작물) 관점으로 해석해 답한다.\n"
     "최종 답변은 지정된 JSON 스키마로만 출력한다."
 )
 
@@ -73,37 +77,35 @@ class Prescription(BaseModel):
 def _guard_directive(diag: dict | None) -> str:
     """환각 방어 ①·② — 진단 결과에 따라 최종 답변 톤을 지시."""
     if diag is None:
-        return ("진단 도구를 호출하지 않았다. 잎 병해 4종 범위 밖이면 '진단 보류'로 정직하게 답하고, "
-                "일반 재배 조언만 신중히 제공하라.")
+        return "진단 도구를 호출하지 않았다. 범위 밖이면 '진단 보류'로 정직하게 답하고, 일반 조언만 제공하라."
     if diag.get("error"):
-        return ("진단 도구 실행에 실패했다(진단 자체가 수행되지 못함). 병명을 절대 단정하지 말고, "
-                "사진을 다시 확인해 재시도하도록 안내하라.")
+        return "진단 도구 실행 실패. 병명을 절대 단정하지 말고, 사진을 다시 확인해 재시도하도록 안내하라."
     if diag.get("ood_blocked"):
-        return (f"진단이 차단되었다(사유: {diag.get('reason')}). 병명을 절대 단정하지 말라. "
-                "왜 진단할 수 없는지 쉽게 설명하고, '재촬영시점'에 잎 뒷면을 밝은 곳에서 다시 찍는 방법을 담아라.")
+        return (f"진단 차단(사유: {diag.get('reason')}). 병명을 절대 단정하지 말라. 이유를 쉽게 설명하고 "
+                "'재촬영시점'에 잎 뒷면을 밝은 곳에서 다시 찍는 방법을 담아라.")
     prob = diag.get("prob", 0.0)
     if prob >= 0.8:
         tone = "확신이 높다. 병명을 단정하고 즉시 방제를 안내하라."
     elif prob >= 0.6:
-        tone = "확신이 중간이다. 단정하지 말고 '가능성'으로 표현하며 관찰을 함께 권하라."
+        tone = "확신이 중간이다. 단정하지 말고 '가능성'으로 표현하며 관찰을 권하라."
     else:
         tone = "확신이 낮다. 절대 단정하지 말고 정밀 확인(재촬영·전문가 상담)을 우선 권하라."
-    return f"진단 신뢰도 {prob:.0%} — {tone} 아는 진단 범위는 잎 병해 4종뿐임을 잊지 마라."
+    return f"진단 신뢰도 {prob:.0%} — {tone} 아는 범위는 잎 병해 4종뿐임을 잊지 마라."
 
 
 def _rag_directive(chunks: list[dict]) -> str:
     """RAG — 검색된 재배가이드 근거를 처방의 사실 기반으로 주입."""
     body = "\n\n".join(f"[{c['title']}] {c['text']}" for c in chunks)
-    return ("아래는 신뢰할 수 있는 재배가이드 근거다. 처방은 이 근거에 부합하게 작성하고, "
-            "근거에 없는 구체적 약제명·수치는 지어내지 말라.\n\n" + body)
+    return ("아래는 신뢰할 수 있는 재배가이드 근거다. 이에 부합하게 처방하고, 근거에 없는 "
+            "약제명·수치는 지어내지 말라.\n\n" + body)
 
 
 def _forecast_directive(fc: dict) -> str:
     """시간축 처방(§5-4) — LSTM 환경예측을 진단과 교차해 선제 조치 유도."""
     return (f"환경 예측(LSTM): 다음날 내부온도 {fc['next_temp']}℃({fc['trend']}), "
             f"최근 습도 평균 {fc['humidity_mean']}% → 습도위험 '{fc['humidity_risk']}'. "
-            "잎곰팡이병은 고습·야간 결로에서 급속히 번진다. 습도위험이 '높음'·'보통'이면 "
-            "야간 환기·제습 같은 환경 선제 조치를 '즉시조치' 또는 '예방'에 시간축으로 포함하라.")
+            "잎곰팡이병은 고습·결로에서 급속히 번진다. 습도위험이 '높음'·'보통'이면 "
+            "야간 환기·제습을 '즉시조치' 또는 '예방'에 포함하라.")
 
 
 def _rag_sources(chunks: list[dict]) -> list[str]:
@@ -120,12 +122,24 @@ def _rag_sources(chunks: list[dict]) -> list[str]:
     return out
 
 
-def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
+def prescribe(user_msg: str, image_path: str | None = None,
+              on_progress: "Callable[[str], None] | None" = None) -> Prescription:
     """사용자 메시지(+선택 잎 사진) → 구조화 자연어 처방.
 
     LLM이 tool을 호출하면 실제 추론을 실행해 결과를 되먹이고(최대 MAX_TOOL_ROUNDS),
     진단 신뢰도/차단 여부에 따라 톤 지시문을 주입한 뒤 JSON 스키마로 최종 처방을 받는다.
+
+    on_progress(#15 C3) — 단계 전환 시점(진단 실행/근거 검색/예보 확인/처방 작성)에 호출되는
+    선택적 콜백. 기본 None이면 기존과 완전히 동일하게 동작한다(하위호환, CLI·pipeline.py 무영향).
     """
+    def _progress(stage: str) -> None:
+        if on_progress is None:
+            return
+        try:                                              # P2-1: 콜백 예외가 처방 자체를 죽이지 않게
+            on_progress(stage)
+        except Exception as e:
+            _log.warning("on_progress 콜백 실패(%s) — 처방은 계속 진행: %s", stage, e)
+
     content = user_msg
     if image_path:
         content += f"\n\n(첨부된 잎 사진 경로: {image_path})"
@@ -133,12 +147,22 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
                 {"role": "user", "content": content}]
 
     diag = None
+    _progress("diagnosis")
     for _ in range(MAX_TOOL_ROUNDS):
-        resp = ollama.chat(model=MODEL, messages=messages, tools=TOOL_SCHEMAS)
+        # C1(#15) — 다음 tool 라운드에서 어차피 버려지는 자유텍스트 장문 생성을 캡으로 축소.
+        # tool_calls를 원하면 여전히 허용(tools=는 그대로 넘김) — 환각방어·MAX_TOOL_ROUNDS 로직 불변.
+        resp = ollama.chat(model=MODEL, messages=messages, tools=TOOL_SCHEMAS,
+                           options={"num_predict": TOOL_ROUND_NUM_PREDICT}, keep_alive=KEEP_ALIVE)
         msg = resp["message"]
         messages.append(msg)
         calls = msg.get("tool_calls") or []
         if not calls:
+            if image_path and diag is None:
+                # 이미지가 첨부됐는데 get_diagnosis가 한 번도 호출되지 않은 채 종료 —
+                # num_predict 캡에 의한 tool_calls 잘림 의심을 포함해 가시화(조용한 "진단 보류" 방지).
+                _log.warning(
+                    "이미지가 첨부됐는데 tool 호출 없이 종료됨(num_predict=%d 캡에 의한 잘림 의심) "
+                    "— 진단 미실행 상태로 처방 생성됨.", TOOL_ROUND_NUM_PREDICT)
             break
         for tc in calls:
             name = tc["function"]["name"]
@@ -167,6 +191,7 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
     # RAG — 진단됐고 차단·오류 아니면 라벨로 재배가이드 근거 검색 후 주입
     rag_chunks: list[dict] = []
     if diag and diag.get("label") and not diag.get("ood_blocked") and not diag.get("error"):
+        _progress("rag")
         try:
             rag_chunks = retrieve(user_msg, disease=diag["label"], k=3)
         except Exception as e:                           # 임베딩/코퍼스 실패해도 처방은 계속
@@ -177,14 +202,16 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
 
     # 시간축 처방 — 습도 민감 병해(잎곰팡이병·잎마름역병)면 환경 예측을 교차 주입
     if diag and diag.get("label") in ("leaf_mold", "late_blight") and not diag.get("ood_blocked") and not diag.get("error"):
+        _progress("forecast")
         fc = get_forecast()
         if fc and not fc.get("unavailable"):
             messages.append({"role": "system", "content": _forecast_directive(fc)})
 
+    _progress("writing")
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
         final = ollama.chat(model=MODEL, messages=messages,
-                            format=Prescription.model_json_schema())
+                            format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)

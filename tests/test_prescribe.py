@@ -171,6 +171,72 @@ def test_prescribe_skips_forecast_for_non_leafmold(monkeypatch):
     assert called["n"] == 0
 
 
+def test_prescribe_tool_round_caps_num_predict_and_sets_keep_alive():
+    """C1(#15) — tool 라운드 chat 호출에 num_predict 캡·keep_alive 전달 검증(낭비 라운드 지연 완화)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    with patch("ollama.chat", side_effect=responses) as mock_chat:
+        prescribe.prescribe("오이 병도 알려줘")
+    first_call_kwargs = mock_chat.call_args_list[0].kwargs
+    assert first_call_kwargs["options"] == {"num_predict": prescribe.TOOL_ROUND_NUM_PREDICT}
+    assert first_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+    final_call_kwargs = mock_chat.call_args_list[1].kwargs
+    assert final_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+
+
+def test_prescribe_warns_when_diagnosis_not_called_with_image(monkeypatch, caplog):
+    """P1 — 이미지 첨부됐는데 tool 미호출로 종료되면 경고 로그로 가시화(조용한 '진단 보류' 방지)."""
+    responses = [
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]
+    with caplog.at_level("WARNING"):
+        with patch("ollama.chat", side_effect=responses):
+            prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
+    assert any("tool 호출 없이 종료" in r.message for r in caplog.records)
+
+
+def test_prescribe_on_progress_exception_does_not_break_prescription():
+    """P2-1 — on_progress 콜백이 raise해도 처방은 정상 반환된다."""
+    def _boom(stage):
+        raise RuntimeError("ui 콜백 실패")
+
+    with patch("ollama.chat", side_effect=[
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]):
+        p = prescribe.prescribe("오이 병도 알려줘", on_progress=_boom)
+    assert isinstance(p, Prescription)
+
+
+def test_prescribe_on_progress_reports_stages(monkeypatch):
+    """C3(#15) — on_progress 콜백이 diagnosis→rag→forecast→writing 단계 순서로 호출된다."""
+    monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
+                        lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
+                                            "prob": 0.9, "probs": {}, "part": "leaf"})
+    monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [
+        {"title": "잎곰팡이병 방제", "source": "https://ncpms.rda.go.kr/", "text": "환기하라"}])
+    monkeypatch.setattr(prescribe, "get_forecast",
+                        lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
+                                "humidity_mean": 90.0, "recent_temp": 29.0})
+    stages: list[str] = []
+    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+        prescribe.prescribe("이 잎 봐줘", image_path="x.jpg", on_progress=stages.append)
+    assert stages == ["diagnosis", "rag", "forecast", "writing"]
+
+
+def test_prescribe_no_on_progress_unchanged():
+    """on_progress 미지정(None)이면 예외 없이 기존과 동일하게 동작(하위호환)."""
+    with patch("ollama.chat", side_effect=[
+        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        {"message": {"role": "assistant", "content": _FINAL}},
+    ]):
+        p = prescribe.prescribe("오이 병도 알려줘")
+    assert isinstance(p, Prescription)
+
+
 def _ollama_up():
     try:
         ollama.list()
