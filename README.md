@@ -12,6 +12,12 @@
 
 > 🚀 **통합 라이브 데모 (ML·DL·LLM 한 페이지):** **https://smartfarm-ai.luma200ok.com**
 
+![농장 대시보드](docs/figures/app/dashboard.png)
+
+| 🔬 잎 병해 진단 (Grad-CAM·YOLO) | 🌡️ 환경 모니터링 (기대값 밴드·경보) |
+|---|---|
+| ![잎 병해 진단](docs/figures/app/diagnosis.png) | ![환경 모니터링](docs/figures/app/monitor.png) |
+
 📄 **수행내역서 (단계별 상세 보고서):**
 - [① Phase 1 · ML — 환경 → 작물 분류](docs/phase1_ml.md)
 - [② Phase 2 · DL — 잎 병해 진단 + 환경 시계열](docs/phase2_dl.md)
@@ -25,7 +31,7 @@
 |---|---|---|---|---|
 | **1. ML** | 환경 센서 → 작물 9종 분류 (2022~24 다년) | RandomForest·XGBoost | test F1 0.68 · **GKF 0.49**(누수 교훈) | ✅ 완료 |
 | **2. DL** | 잎 사진 진단(CNN·YOLO) + 환경 시계열(LSTM) | PyTorch·전이학습·Grad-CAM·MLflow | 진단 4분류 acc **0.96** · YOLO 0.78 · LSTM 1.18℃ | ✅ 완료 |
-| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보·알림 | Ollama(qwen2.5:14b)·function calling·RAG(bge-m3)·디스코드 | 처방+**근거 인용**+환경 교차·코치·경보·**디스코드 알림** | ✅ 완료 |
+| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보·알림 | Ollama(qwen2.5:14b + 처방 fast-path writer exaone3.5:2.4b)·function calling·RAG(bge-m3)·디스코드 | 처방+**근거 인용**+환경 교차·코치·경보·**디스코드 알림** | ✅ 완료 |
 
 > 아래 **Phase별 블록을 하나씩 펼쳐** 핵심 성과·그림·상세를 확인하세요.
 > 문서: [PRD](docs/prd.md) · [로드맵](docs/roadmap.md) · [설계 결정(ADR)](docs/decisions.md)
