@@ -98,14 +98,16 @@ def render():
             with st.status("🔬 잎 진단 실행 중…", expanded=True) as status:
                 st.session_state[K_LAST_DIAG] = tools.get_diagnosis(image_path)
                 if online:
-                    from llm.prescribe import prescribe
+                    # 이슈 #18 — 처방 버튼 경로는 흐름이 고정이므로 fast-path(1-call)로 전환.
+                    from llm.prescribe import prescribe_fast
 
                     def _on_progress(stage: str) -> None:
                         status.update(label=_STAGE_LABEL.get(stage, "처리 중…"))
 
                     status.update(label=_STAGE_LABEL["diagnosis"])
-                    st.session_state[K_LAST_PRESC] = prescribe(
-                        question, image_path=image_path, on_progress=_on_progress)
+                    st.session_state[K_LAST_PRESC] = prescribe_fast(
+                        question, image_path=image_path, on_progress=_on_progress,
+                        diag=st.session_state[K_LAST_DIAG])  # 위에서 이미 실행한 진단 재사용(중복 추론 방지)
                     status.update(label="✅ 처방 완료", state="complete")
                 else:
                     st.session_state.pop(K_LAST_PRESC, None)
