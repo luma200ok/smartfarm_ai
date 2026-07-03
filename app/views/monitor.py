@@ -193,10 +193,12 @@ def _run_control_step(vs, r, setpoints, states):
 
 
 def render_setpoints(setpoints):
-    from control.setpoints import save
+    from copy import copy
+
+    from control.setpoints import save_changed
 
     section("⚙️ 설정 밴드", "히스테리시스 데드밴드로 장치가 경계에서 깜빡이지 않게 해요.")
-    prev = (setpoints.temp_low, setpoints.temp_high, setpoints.hum_low, setpoints.hum_high)
+    prev = copy(setpoints)
     c1, c2 = st.columns(2)
     with c1:
         setpoints.temp_low, setpoints.temp_high = st.slider(
@@ -204,9 +206,14 @@ def render_setpoints(setpoints):
     with c2:
         setpoints.hum_low, setpoints.hum_high = st.slider(
             "습도 밴드(%)", 0.0, 100.0, (setpoints.hum_low, setpoints.hum_high), 1.0)
-    now = (setpoints.temp_low, setpoints.temp_high, setpoints.hum_low, setpoints.hum_high)
-    if now != prev:
-        save(setpoints)
+    if setpoints != prev:
+        # 동시 세션 lost-update 방지(이슈 #21 P2-2): 파일의 최신값을 베이스로
+        # 이번에 실제로 바뀐 필드만 병합해 저장 — merged 결과를 세션에도 반영.
+        merged = save_changed(setpoints, prev)
+        setpoints.temp_low = merged.temp_low
+        setpoints.temp_high = merged.temp_high
+        setpoints.hum_low = merged.hum_low
+        setpoints.hum_high = merged.hum_high
 
 
 def render_devices(states, setpoints, r, date):
