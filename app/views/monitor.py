@@ -375,6 +375,15 @@ def render_discord_settings():
 _TREND_PALETTE = ["#1f77b4", "#7f7f7f", "#d62728", "#2ca02c", "#9467bd"]
 
 
+def _lighten(hex_color: str, ratio: float = 0.55) -> str:
+    """계획(예측) 세그먼트용 밝은 톤 — 실행과 같은 계열이되 옅게(흰색 쪽 혼합).
+
+    실행/계획이 같은 색이면 점선만으로 구분이 어렵다는 사용자 피드백 반영(strokeDash + 명도)."""
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    mix = lambda c: int(c + (255 - c) * ratio)
+    return f"#{mix(r):02x}{mix(g):02x}{mix(b):02x}"
+
+
 def _split_control_segments(long_df, value_cols: list, split_col: "str | None", now_hour: int):
     """실행/계획 세그먼트 분리(이슈 #35) — _live_trend_chart()에서 추출한 순수 로직
     (altair 비의존, 단위 테스트 가능). long_df는 melt된 {hour,구분,값} DataFrame.
@@ -404,7 +413,7 @@ def _split_control_segments(long_df, value_cols: list, split_col: "str | None", 
     long_df = pd.concat([exec_df, planned_df], ignore_index=True)
     color_domain = [c for c in value_cols if c != split_col] + [exec_name, planned_name]
     color_range = [c for c, orig in zip(color_range, value_cols) if orig != split_col] + \
-        [base_color, base_color]
+        [base_color, _lighten(base_color)]
     return long_df, color_domain, color_range
 
 
