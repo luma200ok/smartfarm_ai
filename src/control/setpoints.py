@@ -42,19 +42,26 @@ def _validate(sp: "Setpoints") -> "Setpoints":
 
 
 def save(sp: "Setpoints", path: "Path | None" = None) -> None:
-    """원자적 쓰기: tmp 파일에 쓴 뒤 os.replace로 교체."""
+    """원자적 쓰기: tmp 파일에 쓴 뒤 os.replace로 교체.
+
+    서버 권한·디스크 문제로 쓰기 실패 시 예외를 전파하지 않고 조용히 반환한다
+    (세션 값은 이미 반영돼 있으므로 UI는 계속 동작 — 이슈 #21 P2-1).
+    """
     target = Path(path) if path is not None else SETPOINTS_PATH
-    target.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = target.with_suffix(target.suffix + ".tmp")
     data = {
         "temp_low": sp.temp_low,
         "temp_high": sp.temp_high,
         "hum_low": sp.hum_low,
         "hum_high": sp.hum_high,
     }
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp_path, target)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = target.with_suffix(target.suffix + ".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, target)
+    except OSError:
+        return
 
 
 def load(path: "Path | None" = None) -> "Setpoints":
@@ -75,3 +82,22 @@ def load(path: "Path | None" = None) -> "Setpoints":
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
         return default
     return _validate(sp)
+
+
+_FIELDS = ("temp_low", "temp_high", "hum_low", "hum_high")
+
+
+def save_changed(current: "Setpoints", prev: "Setpoints", path: "Path | None" = None) -> "Setpoints":
+    """동시 세션 lost-update 방지(이슈 #21 P2-2).
+
+    저장 직전 파일의 최신값을 베이스로 하고, `current`가 `prev` 대비 실제로
+    바뀐 필드만 그 위에 병합해 저장한다. 다른 세션이 먼저 저장해둔 값(베이스에는
+    있지만 이번 세션에서 안 건드린 필드)은 보존된다. 병합 결과를 반환하므로
+    호출측이 세션 상태에도 반영할 수 있다.
+    """
+    latest = load(path)
+    for field in _FIELDS:
+        if getattr(current, field) != getattr(prev, field):
+            setattr(latest, field, getattr(current, field))
+    save(latest, path)
+    return latest
