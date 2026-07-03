@@ -4,7 +4,12 @@
 관제형 대시보드로 전면 개편(이슈 #17) — 규칙 기반 자동 제어(src/control/)와 제어 로그·
 긴급 경보를 중심으로 재구성한다. vsensor 생성/시나리오 적용/tick/슬라이더 seek 로직은
 문자 그대로 유지(회귀 방지) — 감싸는 것은 state.get_vsensor 뿐, 조건 분기·순서는 그대로.
+오늘(실제 날짜) 기준 "오늘 운영" 탭(이슈 #23)을 추가 — KMA 외기+기대값 모델로 오늘
+시간대별 제어 전/후 내부 온·습도를 보여준다(src/control/live.py, 규칙 기반). 기존
+리플레이 시뮬레이션은 "🧪 시뮬레이션" 탭으로 그대로 이동(로직 변경 없음).
 """
+from datetime import date as _date
+from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -328,27 +333,94 @@ def render_discord_settings():
         value=st.session_state.get(K_DISCORD_CONTROL_TOGGLE, False))
 
 
-def render():
-    page_header("🌡️ 환경 관제", "설정 밴드를 벗어나면 장치가 자동으로 대응해요(시뮬) — 제어 로그·긴급 알림까지 한 화면에서.")
+def render_live_tab(setpoints):
+    """오늘(실제 날짜) 운영 탭(이슈 #23) — KMA 외기+기대값 모델로 오늘 시간대별
+    제어 전/후 내부 온·습도 시뮬레이션(src/control/live.py, 규칙 기반). KMA
+    unavailable이면 안내 후 🧪 시뮬레이션 탭으로 유도."""
+    from control import live as live_mod
+    from control.actuators import DEVICE_LABEL_KR, default_states
 
-    vs, live, r = render_sensor_controls()
-    if vs is None:
+    outdoor = live_mod.today_outdoor()
+    if outdoor is None:
+        unavailable("오늘 운영", "KMA 외기 조회 실패(키 미설정 또는 API 오류)")
+        st.caption("🧪 시뮬레이션 탭에서 리플레이로 동작을 확인할 수 있어요.")
         return
 
-    setpoints = _get_setpoints()
-    states = _get_device_states(vs.year)
-    _run_control_step(vs, r, setpoints, states)
+    today = _date.today()
+    states = default_states()
+    baseline = live_mod.indoor_baseline(outdoor, date=today)
+    timeline = live_mod.simulate_control(baseline, setpoints, states, date=today)
+    emg = live_mod.emergency_hours(timeline, setpoints)
 
-    render_forecast_row(r, vs.date())
+    if not timeline:
+        st.caption("오늘 시간대별 데이터가 없어요.")
+        return
+
+    now_hour = datetime.now().hour
+    cur = next((t for t in timeline if t["hour"] == now_hour), timeline[-1])
+    devices_on_label = ", ".join(DEVICE_LABEL_KR.get(d, d) for d in cur["devices_on"]) or "-"
+
+    def _fmt(v, unit=""):
+        return "-" if v is None else f"{v:.1f}{unit}"
+
+    metric_row([
+        ("외기 실황", _fmt(cur["out_temp"], "℃"), None),
+        ("예측 내부(제어 전)", _fmt(cur["base_temp"], "℃"), None),
+        ("예측 내부(제어 후)", _fmt(cur["ctrl_temp"], "℃"), None),
+        ("작동 중 장치", devices_on_label, None),
+    ])
+
+    section("📈 오늘 0~24시 추이", "외기·제어 전 기준선·제어 후 내부값 — 밴드를 벗어나면 장치가 자동으로 대응해요.")
+    import pandas as pd
+    rows = [{"시간": f"{t['hour']:02d}시", "외기": t["out_temp"], "제어 전(기준선)": t["base_temp"],
+             "제어 후": t["ctrl_temp"]} for t in timeline]
+    df = pd.DataFrame(rows).set_index("시간")
+    df["온도상한"] = setpoints.temp_high
+    df["온도하한"] = setpoints.temp_low
+    st.line_chart(df[["외기", "제어 전(기준선)", "제어 후", "온도상한", "온도하한"]])
+
+    section("🧾 오늘 제어 이벤트")
+    events = [{"시간": f"{t['hour']:02d}시", "장치": DEVICE_LABEL_KR.get(log.device, log.device),
+               "동작": log.action, "사유": log.reason}
+              for t in timeline for log in t["events"]]
+    if events:
+        st.dataframe(events, hide_index=True, use_container_width=True)
+    else:
+        st.caption("오늘 아직 제어 이벤트가 없어요.")
+
+    if emg:
+        section("🚨 긴급/이상")
+        for item in emg:
+            alert_box("경고", f"{item['hour']:02d}시 — {item['reason']}")
+
+
+def render():
+    page_header("🌡️ 환경 관제", "오늘 실제 운영 상태와 시뮬레이션을 한 화면에서 확인해요.")
+
+    setpoints = _get_setpoints()
+
+    tab_live, tab_sim = st.tabs(["🟢 오늘 운영", "🧪 시뮬레이션"])
+
+    with tab_live:
+        render_live_tab(setpoints)
+
+    with tab_sim:
+        vs, live, r = render_sensor_controls()
+        if vs is not None:
+            states = _get_device_states(vs.year)
+            _run_control_step(vs, r, setpoints, states)
+
+            render_forecast_row(r, vs.date())
+            st.divider()
+            render_devices(states, setpoints, r, vs.date())
+            st.divider()
+            render_trend(vs, live, setpoints)
+            st.divider()
+            render_control_log()
+            render_emergency_feed()
+
     st.divider()
     render_setpoints(setpoints)
-    st.divider()
-    render_devices(states, setpoints, r, vs.date())
-    st.divider()
-    render_trend(vs, live, setpoints)
-    st.divider()
-    render_control_log()
-    render_emergency_feed()
     st.divider()
     render_discord_settings()
 
