@@ -343,6 +343,8 @@ def render_forecast_row(r, date):
     else:
         def _v(x, unit=""):
             return "-" if x is None else f"{x}{unit}"
+        if current.get("stale"):
+            st.caption("⏳ 기상청 갱신 지연 — 직전 조회 데이터 표시 중")
         st.caption(f"실시간 외기 참고 — {_v(current.get('temp'), '℃')} · "
                    f"습도 {_v(current.get('humidity'), '%')} (재생 날짜와 다를 수 있어요)")
 
