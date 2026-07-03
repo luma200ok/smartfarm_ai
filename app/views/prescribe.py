@@ -87,15 +87,29 @@ def render():
             st.error("이미지를 찾을 수 없어요.")
         else:
             from llm import tools
-            with st.spinner("DL 진단 중 (모델·환경에 따라 수십 초 걸려요)" if not online else
-                             "DL 진단 + LLM 처방 생성 중 (모델·환경에 따라 수십 초 걸려요) "
-                             "— 생성 중 다른 버튼을 누르면 취소돼요"):
+
+            # 이슈 #15 C3 — 단계별 진행 표시(st.status). 이슈 #10 톤(에러 3단계, "~해요"체) 준수.
+            _STAGE_LABEL = {
+                "diagnosis": "🔬 잎 진단 실행 중…",
+                "rag": "📚 근거 검색 중…",
+                "forecast": "🌦️ 예보 확인 중…",
+                "writing": "✍️ 처방 작성 중…",
+            }
+            with st.status("🔬 잎 진단 실행 중…", expanded=True) as status:
                 st.session_state[K_LAST_DIAG] = tools.get_diagnosis(image_path)
                 if online:
                     from llm.prescribe import prescribe
-                    st.session_state[K_LAST_PRESC] = prescribe(question, image_path=image_path)
+
+                    def _on_progress(stage: str) -> None:
+                        status.update(label=_STAGE_LABEL.get(stage, "처리 중…"))
+
+                    status.update(label=_STAGE_LABEL["diagnosis"])
+                    st.session_state[K_LAST_PRESC] = prescribe(
+                        question, image_path=image_path, on_progress=_on_progress)
+                    status.update(label="✅ 처방 완료", state="complete")
                 else:
                     st.session_state.pop(K_LAST_PRESC, None)
+                    status.update(label="✅ DL 진단 완료", state="complete")
 
     # 처방 결과 렌더(세션 보관 — rerun/전송 버튼에도 유지)
     if K_LAST_DIAG in st.session_state:

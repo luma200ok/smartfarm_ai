@@ -18,6 +18,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 import ollama
 from dotenv import load_dotenv
@@ -120,12 +121,20 @@ def _rag_sources(chunks: list[dict]) -> list[str]:
     return out
 
 
-def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
+def prescribe(user_msg: str, image_path: str | None = None,
+              on_progress: "Callable[[str], None] | None" = None) -> Prescription:
     """사용자 메시지(+선택 잎 사진) → 구조화 자연어 처방.
 
     LLM이 tool을 호출하면 실제 추론을 실행해 결과를 되먹이고(최대 MAX_TOOL_ROUNDS),
     진단 신뢰도/차단 여부에 따라 톤 지시문을 주입한 뒤 JSON 스키마로 최종 처방을 받는다.
+
+    on_progress(#15 C3) — 단계 전환 시점(진단 실행/근거 검색/예보 확인/처방 작성)에 호출되는
+    선택적 콜백. 기본 None이면 기존과 완전히 동일하게 동작한다(하위호환, CLI·pipeline.py 무영향).
     """
+    def _progress(stage: str) -> None:
+        if on_progress is not None:
+            on_progress(stage)
+
     content = user_msg
     if image_path:
         content += f"\n\n(첨부된 잎 사진 경로: {image_path})"
@@ -133,6 +142,7 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
                 {"role": "user", "content": content}]
 
     diag = None
+    _progress("diagnosis")
     for _ in range(MAX_TOOL_ROUNDS):
         # C1(#15) — 다음 tool 라운드에서 어차피 버려지는 자유텍스트 장문 생성을 128tok으로 캡.
         # tool_calls를 원하면 여전히 허용(tools=는 그대로 넘김) — 환각방어·MAX_TOOL_ROUNDS 로직 불변.
@@ -170,6 +180,7 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
     # RAG — 진단됐고 차단·오류 아니면 라벨로 재배가이드 근거 검색 후 주입
     rag_chunks: list[dict] = []
     if diag and diag.get("label") and not diag.get("ood_blocked") and not diag.get("error"):
+        _progress("rag")
         try:
             rag_chunks = retrieve(user_msg, disease=diag["label"], k=3)
         except Exception as e:                           # 임베딩/코퍼스 실패해도 처방은 계속
@@ -180,10 +191,12 @@ def prescribe(user_msg: str, image_path: str | None = None) -> Prescription:
 
     # 시간축 처방 — 습도 민감 병해(잎곰팡이병·잎마름역병)면 환경 예측을 교차 주입
     if diag and diag.get("label") in ("leaf_mold", "late_blight") and not diag.get("ood_blocked") and not diag.get("error"):
+        _progress("forecast")
         fc = get_forecast()
         if fc and not fc.get("unavailable"):
             messages.append({"role": "system", "content": _forecast_directive(fc)})
 
+    _progress("writing")
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
         final = ollama.chat(model=MODEL, messages=messages,
