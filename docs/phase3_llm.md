@@ -100,7 +100,7 @@ DL이 주는 *확률·게이트·클래스 목록*을 그대로 활용해 "AI가
 | **3-1** Ollama + function calling | 진단 → 처방, 환각 방어 3종, 눈높이 언어(C) | `src/llm/prescribe.py` |
 | **3-2** RAG | 농사로 수집·chunking·임베딩·검색(D 상담 포함) | `src/llm/rag/` + 코퍼스 |
 | **3-3** 통합 파이프라인 | ML/DL/LLM 연결 + 일일 코치(A) + 조기 경보(B) + 시간축 처방 | `src/llm/pipeline.py` |
-| **3-4** 알림 + 대시보드 | 디스코드 Webhook(기존 재사용) + 처방·코치 UI | `src/llm/notify.py` + 앱 «AI 처방»·«환경 모니터링»(`app/views/prescribe.py`·`monitor.py`) |
+| **3-4** 알림 + 대시보드 | 디스코드 Webhook(기존 재사용) + 처방·코치 UI | `src/llm/notify.py` + 앱 «AI 처방»·«환경 관제»(`app/views/prescribe.py`·`monitor.py`) |
 
 ## 7. 범위·한계 (Scope) — 정직성
 - **진단 = 잎병 3종(+정상).** 출발은 AI Hub 071의 잎병 2종(잎곰팡이병·황화잎말이) — 071 질병이 area=잎에만 존재해 과실·꽃·줄기 병해는 제외. 이후 **잎마름역병(late_blight)을 PlantVillage(CC0) 혼합으로 확장**해 4분류가 됨(PR #3) — "데이터 추가 시 클래스+코퍼스 동반 확장" 경로를 실제로 밟은 사례.
@@ -109,7 +109,8 @@ DL이 주는 *확률·게이트·클래스 목록*을 그대로 활용해 "AI가
 ## 8. 완료 기준
 - 평상시 코치(A)·조기경보(B)가 돌고, 사진 확인(DL)→처방·안심(C)→상담(D)까지 한 흐름.
 - 처방에 **근거 출처**(농사로) 동반, 저확신·범위밖 케이스에서 단정하지 않음.
-- 앱 «AI 처방»·«환경 모니터링» 페이지(`app/views/prescribe.py`·`monitor.py`) + 디스코드 알림 동작.
+- 앱 «AI 처방»·«환경 관제» 페이지(`app/views/prescribe.py`·`monitor.py`) + 디스코드 알림 동작.
+- (이슈 #17 후속) 앱의 관제 페이지는 **규칙 기반**(`src/control/`)으로 전환 — 일일 코치·날씨 Q&A는 앱에서 빠지고 `pipeline.py`(CLI)에 유지. *진단·처방=LLM, 관제=규칙*으로 분업 확정.
 
 ## 9. 결과 (Result)
 - **처방(C)**: 잎 사진 → 게이트→진단→function calling→RAG 근거→구조화 JSON 처방. 근거출처는 LLM이 아니라 **코드가 채움**(환각 배제), 스키마 위반 시 1회 재시도 후 안전 폴백.

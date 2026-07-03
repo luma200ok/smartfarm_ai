@@ -14,9 +14,9 @@
 
 ![농장 대시보드](docs/figures/app/dashboard.png)
 
-| 🔬 잎 병해 진단 (Grad-CAM·YOLO) | 🌡️ 환경 모니터링 (기대값 밴드·경보) |
+| 🔬 잎 병해 진단 (Grad-CAM·YOLO) | 🌡️ 환경 관제 (밴드 자동제어·경보) |
 |---|---|
-| ![잎 병해 진단](docs/figures/app/diagnosis.png) | ![환경 모니터링](docs/figures/app/monitor.png) |
+| ![잎 병해 진단](docs/figures/app/diagnosis.png) | ![환경 관제](docs/figures/app/monitor.png) |
 
 📄 **수행내역서 (단계별 상세 보고서):**
 - [① Phase 1 · ML — 환경 → 작물 분류](docs/phase1_ml.md)
@@ -108,7 +108,9 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 
 - ✅ **처방 응답 속도 개선(이슈 #15)** — tool 라운드 낭비 생성 캡 + `keep_alive=30m`(콜드 재적재 제거) + 프롬프트 다이어트(-17~20% 토큰) → 로컬 웜 **28s→17~19s(-35%)**, 처방 화면 단계별 진행 표시(`st.status`)로 체감 대기 완화.
 
-**실행:** `streamlit run app/streamlit_app.py` → «AI 처방»·«환경 모니터링» 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
+- ✅ **환경 관제 개편(이슈 #17)** — 모니터링 페이지를 **규칙 기반 관제형**으로 전환: 설정 밴드(온도 20~25℃·습도 60~85%)+히스테리시스 → 환기·가습기·쿨링팬·히터 **자동 ON/OFF(시뮬, 효과 피드백)** + 수동 토글 + 제어 로그 + 긴급 디스코드 알림. LLM 코치·날씨 Q&A는 앱에서 제거(파이프라인·CLI 유지) — 진단·처방만 LLM, 관제는 규칙으로 분업.
+
+**실행:** `streamlit run app/streamlit_app.py` → «AI 처방»·«환경 관제» 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
 
 **🎯 예시 처방:** 🔬 잎곰팡이병 의심 → 감염 잎 제거·습도↓ · 📖 근거: 농사로/NCPMS · 🌡️ 다음날 고습 예측 → 야간 환기
 
