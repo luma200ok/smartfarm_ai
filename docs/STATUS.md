@@ -21,7 +21,7 @@
 | ➕ 자동감시 | `src/llm/monitor.py` | 규칙 임계값(습도·온도) 위험 시 디스코드 **자동** 알림(중복방지) |
 | ➕ 날씨 | `src/llm/weather.py`·`tools.py`(get_weather)·`pipeline.py`(weather_qa) | 기상청 단기예보 API — 외기 실황·3일 예보 + 날씨 Q&A(앱 외부날씨 섹션). PR #9·#11, 이슈 #6 1단계 |
 | ➕ 기대값 | `src/ml/train_expect.py`·`src/llm/expect.py`·`monitor.py`(cause·equip_anom·feedforward)·`sim/virtual_sensor.py`(inject) | 외기→실내 기대값 회귀(XGB MAE 1.11/1.44℃) — 원인 구분 경보·조기 감지·사전 경보·시나리오 데모. PR #12·#13, 이슈 #6 완결(+#2 흡수) |
-| ➕ 관제 | `src/control/`(setpoints·actuators·controller·effects)·`app/views/monitor.py` | 규칙 기반(LLM 무관) 설정 밴드(온도 20~25℃·습도 60~85%)+히스테리시스 → 장치 4종(환기·가습기·쿨링팬·히터) 자동 ON/OFF·수동 토글·효과 피드백(inject tag 분리)·제어 로그·긴급 알림(자기정리 dedup). 앱 «환경 관제»로 개편(LLM 코치·날씨 Q&A 제거, pipeline·CLI는 유지). PR #20, 이슈 #17 |
+| ➕ 관제 | `src/control/`(setpoints·actuators·controller·effects)·`app/views/monitor.py` | 규칙 기반(LLM 무관) 설정 밴드(온도 20~25℃·습도 60~85%)+히스테리시스 → 장치 4종(환기·가습기·쿨링팬·히터) 자동 ON/OFF·수동 토글·효과 피드백(inject tag 분리)·제어 로그·긴급 알림(자기정리 dedup). 앱 «환경 관제»로 개편(LLM 코치·날씨 Q&A 제거, pipeline·CLI는 유지). PR #20, 이슈 #17. 설정 밴드는 `data/control_setpoints.json` 파일 영속(전역 공유, 폴백·병합 저장 — PR #22, 이슈 #21) |
 
 앱: `streamlit run app/streamlit_app.py` → **서비스형 2그룹 네비**([서비스] 농장 대시보드·잎 병해 진단·AI 처방·환경 관제·작물 환경 추천 / [프로젝트 기록] 개요·성과, ML/DL 실험 기록). `app/views/` 8페이지 + 공통 `ui.py`·`state.py`·`nav.py`·`.streamlit/config.toml` 테마 (이슈 #10, PR #14).
 
@@ -44,6 +44,7 @@
 - [x] **처방 지연 개선**(이슈 #15 클로즈): tool 라운드 num_predict 캡·keep_alive 30m·프롬프트 -17~20%·st.status 진행 표시 — 로컬 웜 28→17~19s(-35%), OCI CPU 추론 부담 완화 (PR #16)
 - [x] **처방 fast-path 전환**(이슈 #18 클로즈): 진단·RAG·예보 코드 직행 + LLM 최종 JSON 1-call + writer 모델 분리(`OLLAMA_WRITER_MODEL`, 서버=exaone3.5:2.4b) — **서버 342.6→웜 16.2s(-95%)**, 로컬 10~15s. agentic prescribe()는 CLI·Q&A 유지 (PR #19)
 - [x] **관제형 대시보드 개편**(이슈 #17 클로즈): 규칙 기반 밴드 자동제어(장치 4종 시뮬+효과 피드백)·제어 로그·긴급 디스코드 알림, 모니터링→«환경 관제» 전환 — 서버 배포·실검증 완료 (PR #20)
+- [x] **설정 밴드 파일 영속화**(이슈 #21 클로즈): 새로고침·재접속 초기화 → `data/control_setpoints.json` 원자적 저장+폴백+변경 필드 병합, 서버 실검증(새 세션 유지) 완료 (PR #22)
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
 - [ ] 진단 병해 클래스 확장 2차: 흰가루·잿빛(데이터 수집 필요).
 - [ ] 실센서/스프링 서버 sensor API를 `monitor.py`·가상센서 소스로 어댑터 연결
