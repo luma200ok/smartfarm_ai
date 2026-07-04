@@ -98,7 +98,7 @@
 LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/DL, 설명·처방은 LLM(분업).
 
 - ✅ **3-1 Ollama function calling** — 진단(get_diagnosis)·검출(get_detection) tool 호출 → 자연어 처방. **환각 방어 3종**(신뢰도 톤 분기·게이트 차단 안내·클래스 한정성).
-- ✅ **3-2 RAG(bge-m3)** — 농사로/NCPMS 재배가이드 검색 → 처방에 **근거 출처 인용**(코드 주입, 환각 배제).
+- ✅ **3-2 RAG(bge-m3)** — 농사로/NCPMS 재배가이드 검색 → 처방에 **근거 출처 인용**(코드 주입, 환각 배제). 병해 코퍼스(`잎곰팡이병`·`잎마름역병`)는 **NCPMS OpenAPI 실데이터**로 생성(`python -m llm.rag.nongsaro_loader`, `.env`에 `NCPMS_API_KEY` 필요 · NCPMS는 KOGL 제2유형 출처표시·비상업). 바이러스병(TYLCV)·일반 재배는 NCPMS/농사로 API 자료가 빈약해 검수한 수기 코퍼스 유지.
 - ✅ **3-3 통합** — LSTM 환경예측(get_forecast, 다음날 내부온도 MAE 1.11℃) 실연동 → **시간축 처방**(고습 예측 시 환기) + **일일 코치·조기 경보**.
 - ✅ **3-4 알림** — 조기경보·처방을 **디스코드 Webhook**으로 발송(수동 버튼, 기존 smartfarm 웹훅 재사용).
 - ✅ **센서 자동 감시** — `python src/llm/monitor.py --year 2024 --interval 1` : 규칙 임계값(습도≥90·온도≥35/≤5) 위험 시 **자동** 디스코드 알림(중복 방지). `.env`에 `DISCORD_WEBHOOK_URL` 필요.

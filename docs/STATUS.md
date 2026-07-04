@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-04(스냅샷 누적 PR #41 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-04(NCPMS 코퍼스 실데이터화 PR #43 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -15,7 +15,7 @@
 | 청크 | 산출물 | 요약 |
 |---|---|---|
 | 3-1 처방 | `src/llm/prescribe.py`·`tools.py` | Ollama `qwen2.5:14b` function calling(get_diagnosis·get_detection·get_forecast) + 환각방어 3종 + 구조화 JSON. 지연 개선: tool 라운드 캡·keep_alive 30m·프롬프트 다이어트·진행 콜백(이슈 #15, PR #16) → **fast-path 1-call**(`prescribe_fast`, 진단·RAG·예보 코드 직행 + writer 모델 분리, 이슈 #18, PR #19 — 서버 342.6→16.2s) |
-| 3-2 RAG | `src/llm/rag/`·`data/nongsaro/*.md` | 농사로/NCPMS 코퍼스 → bge-m3 임베딩·numpy 코사인 → 근거 출처 코드 주입 |
+| 3-2 RAG | `src/llm/rag/`·`data/nongsaro/*.md` | 농사로/NCPMS 코퍼스 → bge-m3 임베딩·numpy 코사인 → 근거 출처 코드 주입. 병해 2건은 NCPMS OpenAPI 실데이터(`nongsaro_loader.py`) |
 | 3-3 통합 | `src/dl/infer.py`(forecast)·`src/dl/train_lstm.py`·`src/llm/pipeline.py`·`src/sim/virtual_sensor.py` | LSTM 환경예측(토마토 전용, MAE 1.11℃) + 시간축 처방 + 일일코치·조기경보 + 가상센서 재생 |
 | 3-4 알림 | `src/llm/notify.py` | 경보·처방 디스코드 Webhook 발송(수동 버튼, 앱) |
 | ➕ 자동감시 | `src/llm/monitor.py` | 규칙 임계값(습도·온도) 위험 시 디스코드 **자동** 알림(중복방지) |
@@ -56,7 +56,7 @@
 - [x] **설정 밴드 파일 영속화**(이슈 #21 클로즈): 새로고침·재접속 초기화 → `data/control_setpoints.json` 원자적 저장+폴백+변경 필드 병합, 서버 실검증(새 세션 유지) 완료 (PR #22)
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
 ### 🔥 활성
-- [ ] **농사로 OpenAPI 로더**(진행 중): 수기 코퍼스 4문서 대체 + normal 코퍼스 실자료화 — RAG 검색 품질 상한 해소, 이후 병해 확장 시 코퍼스 자동화 기반
+- [x] **NCPMS OpenAPI 로더**(이슈 #42 클로즈): 병해 코퍼스를 NCPMS 실데이터로 생성(`nongsaro_loader.py`, stdlib만·의존성0, SVC01 검색→SVC05 상세, sickKey 하드코딩, `<br/>`정리·캐시). leaf_mold(D00001533)·late_blight(D00001550) 교체 — 발병 최적온·습도 등 구체 수치로 수기본 대비 정확도↑ (PR #43). 조사 결론: **농사로 미채택**(토마토 재배환경 지식 API 부재, 게시판글·시설평가 설문뿐) · **tylcv 제외**(NCPMS 바이러스 레코드 빈약=발생환경·증상 없음→수기 유지) · **tomato_general 유지**. NCPMS=KOGL 2유형(출처표시·비상업). 후속(리뷰 P3): 단일 레코드 전제 주석·build 예외 래핑
 - [ ] **대화형 Q&A 디스코드 봇**(검토 중): pipeline Q&A 경로를 봇으로 노출(Webhook과 별개) — CPU 서버 응답 지연(agentic 경로 수십 초) 감안해 설계 필요
 
 ### 💤 보류 (재개 조건 명시)
