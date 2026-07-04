@@ -7,9 +7,7 @@ run_notify()는 서버 타이머(1시간 간격, systemd timer)에서 호출되�
 파일 기반이라 앱·타이머 프로세스가 상태를 공유한다).
 """
 import argparse
-import json
 import logging
-import os
 from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
@@ -328,13 +326,8 @@ def _emergency_key(item: dict) -> str:
 # ── 상태 파일 (data/control_live_state.json) — 세션이 아닌 파일 기반 dedup ──────────
 
 def _load_state() -> dict:
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    from control import state_io
+    return state_io.load_json(STATE_PATH)
 
 
 def load_last_ctrl() -> "dict | None":
@@ -346,14 +339,8 @@ def load_last_ctrl() -> "dict | None":
 
 def _save_state(state: dict) -> None:
     """setpoints.save()와 동일한 원자적 쓰기 패턴 — 실패해도 예외 전파 없음."""
-    try:
-        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, STATE_PATH)
-    except OSError:
-        return
+    from control import state_io
+    state_io.save_json_atomic(STATE_PATH, state)
 
 
 def _device_embed(transitions: dict, date_str: str) -> dict:
