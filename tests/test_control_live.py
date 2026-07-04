@@ -690,3 +690,317 @@ def test_run_notify_persists_last_ctrl_and_preserves_dedup_fields(
     assert state["last_ctrl"]["date"] == "2026-07-03"
     assert state["last_ctrl"]["temp"] is not None
     assert "devices" in state and "emergency_hours" in state  # 기존 dedup 필드 보존
+
+
+# ── record_snapshot / load_today_snapshots / archive_snapshots (이슈 #40) ───────────
+def _make_item(hour, ctrl_temp=22.0, ctrl_hum=70.0, events=None):
+    from control.actuators import ControlLog
+    return {"hour": hour, "out_temp": 26.0, "out_hum": 78.0, "base_temp": 26.7, "base_hum": 88.0,
+            "ctrl_temp": ctrl_temp, "ctrl_hum": ctrl_hum, "devices_on": ["dehumidifier"],
+            "events": events if events is not None else
+            [ControlLog(date="2026-07-05", device="dehumidifier", action="ON", reason="고습")]}
+
+
+def test_record_snapshot_first_write_wins():
+    state = {}
+    item = _make_item(14)
+    assert live.record_snapshot(state, item, source="sim") is True
+    assert state["snapshots"]["14"]["ctrl_temp"] == 22.0
+    assert state["version"] == 2
+
+    # 재기록 시도 — 값이 달라도 덮지 않고 False
+    item2 = _make_item(14, ctrl_temp=99.0)
+    assert live.record_snapshot(state, item2, source="sim") is False
+    assert state["snapshots"]["14"]["ctrl_temp"] == 22.0  # 불변
+
+
+def test_record_snapshot_serializes_control_log_events():
+    state = {}
+    item = _make_item(9)
+    live.record_snapshot(state, item)
+    events = state["snapshots"]["9"]["events"]
+    assert events == [{"device": "dehumidifier", "action": "ON", "reason": "고습", "mode": "auto"}]
+
+
+def test_load_today_snapshots_date_mismatch_returns_empty(_isolated_state):
+    from datetime import date
+    state = {"date": "2026-07-04", "snapshots": {"10": {"ctrl_temp": 1.0}}}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(state), encoding="utf-8")
+    assert live.load_today_snapshots(today=date(2026, 7, 5)) == {}
+
+
+def test_load_today_snapshots_v1_file_backward_compat(_isolated_state):
+    """snapshots 키가 없는 v1 상태 파일 — 빈 dict로 자연 흡수(예외 없음)."""
+    from datetime import date
+    state = {"date": "2026-07-05", "devices": {}, "last_ctrl": None}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(state), encoding="utf-8")
+    assert live.load_today_snapshots(today=date(2026, 7, 5)) == {}
+
+
+def test_load_today_snapshots_matches_date(_isolated_state):
+    from datetime import date
+    state = {"date": "2026-07-05", "snapshots": {"10": {"ctrl_temp": 1.0}}}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(state), encoding="utf-8")
+    assert live.load_today_snapshots(today=date(2026, 7, 5)) == {"10": {"ctrl_temp": 1.0}}
+
+
+@pytest.fixture
+def _isolated_history(tmp_path, monkeypatch):
+    history_path = tmp_path / "control_history.json"
+    monkeypatch.setattr(live, "HISTORY_PATH", history_path)
+    return history_path
+
+
+def test_archive_snapshots_merges_by_date(_isolated_history):
+    prev_state = {"date": "2026-07-04", "snapshots": {"9": {"ctrl_temp": 20.0}}}
+    live.archive_snapshots(prev_state)
+    history = json.loads(_isolated_history.read_text(encoding="utf-8"))
+    assert history == {"2026-07-04": {"9": {"ctrl_temp": 20.0}}}
+
+
+def test_archive_snapshots_noop_when_no_snapshots(_isolated_history):
+    live.archive_snapshots({"date": "2026-07-04", "snapshots": {}})
+    assert not _isolated_history.exists()
+    live.archive_snapshots({})
+    assert not _isolated_history.exists()
+
+
+def test_archive_snapshots_prunes_to_30_days(_isolated_history):
+    import json as _json
+    old_history = {f"2026-01-{d:02d}": {"0": {}} for d in range(1, 32)}  # 31일치
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(_json.dumps(old_history), encoding="utf-8")
+
+    prev_state = {"date": "2026-02-01", "snapshots": {"0": {"ctrl_temp": 5.0}}}
+    live.archive_snapshots(prev_state)
+    history = json.loads(_isolated_history.read_text(encoding="utf-8"))
+    assert len(history) == 30
+    assert "2026-02-01" in history
+    assert "2026-01-01" not in history  # 가장 오래된 것이 프룬됨
+
+
+# ── simulate_control seed_ctrl (이슈 #40) ───────────────────────────────────────
+def test_simulate_control_seed_ctrl_applies_start_value():
+    baseline = _baseline({h: (30.0, 90.0) for h in range(3)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-05",
+                                      seed_ctrl=(21.0, 65.0))
+    assert timeline[0]["ctrl_temp"] == pytest.approx(21.0)
+    assert timeline[0]["ctrl_hum"] == pytest.approx(65.0)
+
+
+def test_simulate_control_seed_ctrl_overrides_initial_ctrl():
+    from datetime import date as _dt
+    baseline = _baseline({h: (30.0, 90.0) for h in range(3)})
+    states = default_states()
+    yesterday_ctrl = {"date": "2026-07-04", "temp": 10.0, "hum": 10.0}
+    timeline = live.simulate_control(baseline, _sp(), states, date=_dt(2026, 7, 5),
+                                      initial_ctrl=yesterday_ctrl, seed_ctrl=(21.0, 65.0))
+    assert timeline[0]["ctrl_temp"] == pytest.approx(21.0)
+    assert timeline[0]["ctrl_hum"] == pytest.approx(65.0)
+
+
+def test_simulate_control_seed_ctrl_none_keeps_existing_behavior():
+    baseline = _baseline({h: (30.0, 90.0) for h in range(3)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-05", seed_ctrl=None)
+    assert timeline[0]["ctrl_temp"] == pytest.approx(30.0)  # 기존 거동(기준선 그대로)
+
+
+# ── assemble_today_timeline (이슈 #40) ──────────────────────────────────────────
+def _outdoor(hours_temp: dict, hum: float = 70.0):
+    return [{"hour": h, "temp": t, "humidity": hum} for h, t in hours_temp.items()]
+
+
+def test_assemble_today_timeline_past_from_snapshot_future_from_simulation(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    from datetime import date
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    today = date(2026, 7, 5)
+
+    state = {"date": "2026-07-05", "snapshots": {
+        "8": {"out_temp": 20.0, "out_hum": 70.0, "base_temp": 20.0, "base_hum": 70.0,
+              "ctrl_temp": 21.0, "ctrl_hum": 65.0, "devices_on": [], "events": [],
+              "source": "sim", "recorded_at": "2026-07-05T08:00:00"},
+    }}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(state), encoding="utf-8")
+
+    outdoor = _outdoor({h: 22.0 for h in range(6, 24)})
+    states = default_states()
+    timeline = live.assemble_today_timeline(outdoor, _sp(), states, today, now_hour=10)
+
+    hours = [t["hour"] for t in timeline]
+    assert 8 in hours  # 과거=스냅샷 복원
+    assert timeline[hours.index(8)]["ctrl_temp"] == pytest.approx(21.0)
+    assert 10 in hours and max(hours) >= 10  # 현재·미래=시뮬 합성 포함
+    # 경계 연속성 — 미래 첫 시간(now_hour=10)의 ctrl_temp가 스냅샷 마지막 값(21.0)에서 이어짐
+    fut_first = next(t for t in timeline if t["hour"] == 10)
+    assert fut_first["ctrl_temp"] == pytest.approx(21.0)
+
+
+def test_assemble_today_timeline_no_snapshots_matches_legacy_path(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """스냅샷이 하나도 없으면 기존 경로(load_last_ctrl + fallback_clamp=True)와 동일 결과."""
+    from datetime import date
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    today = date(2026, 7, 5)
+    outdoor = _outdoor({h: 30.0 for h in range(24)})
+
+    states1 = default_states()
+    legacy_baseline = live.indoor_baseline(outdoor, date=today)
+    legacy = live.simulate_control(legacy_baseline, _sp(), states1, date=today,
+                                    initial_ctrl=live.load_last_ctrl(), fallback_clamp=True)
+
+    states2 = default_states()
+    assembled = live.assemble_today_timeline(outdoor, _sp(), states2, today, now_hour=0)
+
+    assert [t["hour"] for t in assembled] == [t["hour"] for t in legacy]
+    assert assembled[0]["ctrl_temp"] == pytest.approx(legacy[0]["ctrl_temp"])
+
+
+def test_assemble_today_timeline_missing_past_hour_falls_back_to_simulation(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """기록 없는 과거 시간이 outdoor에 남아 있으면 시뮬값으로 폴백해 결측 없이 채운다."""
+    from datetime import date
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    today = date(2026, 7, 5)
+    outdoor = _outdoor({h: 22.0 for h in range(6, 24)})  # 6시부터 데이터 있음, 스냅샷은 없음
+    states = default_states()
+    timeline = live.assemble_today_timeline(outdoor, _sp(), states, today, now_hour=10)
+    hours = [t["hour"] for t in timeline]
+    assert 8 in hours  # 과거(6~9시)도 시뮬값 폴백으로 채워짐 — 결측 아님
+    assert 6 in hours
+
+
+def test_assemble_today_timeline_missing_past_hour_no_outdoor_is_omitted(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    """기록도 없고 outdoor에도 없는 과거 시간은 결측 생략(행 없음)."""
+    from datetime import date
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    today = date(2026, 7, 5)
+    outdoor = _outdoor({h: 22.0 for h in range(10, 24)})  # 10시 이전 데이터 없음
+    states = default_states()
+    timeline = live.assemble_today_timeline(outdoor, _sp(), states, today, now_hour=10)
+    hours = [t["hour"] for t in timeline]
+    assert 5 not in hours
+    assert 0 not in hours
+
+
+def test_assemble_today_timeline_outdoor_none_returns_only_past_snapshots(_isolated_state):
+    from datetime import date
+    today = date(2026, 7, 5)
+    state = {"date": "2026-07-05", "snapshots": {
+        "8": {"out_temp": 20.0, "out_hum": 70.0, "base_temp": 20.0, "base_hum": 70.0,
+              "ctrl_temp": 21.0, "ctrl_hum": 65.0, "devices_on": [], "events": []},
+        "12": {"out_temp": 20.0, "out_hum": 70.0, "base_temp": 20.0, "base_hum": 70.0,
+               "ctrl_temp": 21.0, "ctrl_hum": 65.0, "devices_on": [], "events": []},
+    }}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(state), encoding="utf-8")
+
+    states = default_states()
+    timeline = live.assemble_today_timeline(None, _sp(), states, today, now_hour=10)
+    hours = [t["hour"] for t in timeline]
+    assert hours == [8]  # 12시는 now_hour(10) 이후라 과거 아님 → 미포함, outdoor 없어 미래도 없음
+
+
+def test_assemble_today_timeline_outdoor_none_no_snapshots_returns_empty(_isolated_state):
+    from datetime import date
+    states = default_states()
+    timeline = live.assemble_today_timeline(None, _sp(), states, date(2026, 7, 5), now_hour=10)
+    assert timeline == []
+
+
+# ── run_notify — 스냅샷 기록·보존·롤오버(이슈 #40) ───────────────────────────────
+def test_run_notify_records_snapshot_for_current_hour(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    from datetime import date, datetime
+    from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(ramp, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    _patch_notify(monkeypatch, [])
+
+    today = date(2026, 7, 3)
+    now = datetime(2026, 7, 3, 12, 0)
+    live.run_notify(dry_run=False, today=today, now=now)
+
+    state = json.loads(_isolated_state.read_text(encoding="utf-8"))
+    assert state["version"] == 2
+    assert "12" in state["snapshots"]
+    assert state["snapshots"]["12"]["source"] == "sim"
+
+
+def test_run_notify_accumulates_snapshots_same_day(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    from datetime import date, datetime
+    from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(ramp, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    _patch_notify(monkeypatch, [])
+
+    today = date(2026, 7, 3)
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 9, 0))
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 12, 0))
+
+    state = json.loads(_isolated_state.read_text(encoding="utf-8"))
+    assert "9" in state["snapshots"]
+    assert "12" in state["snapshots"]  # 누적
+
+
+def test_run_notify_kma_fail_preserves_snapshots(
+        monkeypatch, _isolated_state, _isolated_setpoints):
+    from datetime import date, datetime
+    from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(ramp, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    _patch_notify(monkeypatch, [])
+
+    today = date(2026, 7, 3)
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 9, 0))
+
+    # 두 번째 호출은 KMA 실패
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: {"unavailable": True, "reason": "일시 오류"})
+    live.run_notify(dry_run=False, today=today, now=datetime(2026, 7, 3, 10, 0))
+
+    state = json.loads(_isolated_state.read_text(encoding="utf-8"))
+    assert "9" in state["snapshots"]  # KMA 실패에도 이전 스냅샷 유실 없음
+
+
+def test_run_notify_date_rollover_archives_and_prunes(
+        monkeypatch, _isolated_state, _isolated_setpoints, _isolated_history):
+    from datetime import date, datetime
+    from llm import weather
+    ramp = {h: 20.0 + h * 1.0 for h in range(24)}
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(ramp, date_str="20260703"))
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+    _patch_expect_model(monkeypatch, slope=1.0, intercept=0.0)
+    _patch_notify(monkeypatch, [])
+
+    live.run_notify(dry_run=False, today=date(2026, 7, 3), now=datetime(2026, 7, 3, 12, 0))
+
+    monkeypatch.setattr(weather, "get_forecast_3d",
+                         lambda: _forecast(ramp, date_str="20260704"))
+    live.run_notify(dry_run=False, today=date(2026, 7, 4), now=datetime(2026, 7, 4, 9, 0))
+
+    history = json.loads(_isolated_history.read_text(encoding="utf-8"))
+    assert "2026-07-03" in history
+    assert "12" in history["2026-07-03"]
+
+    new_state = json.loads(_isolated_state.read_text(encoding="utf-8"))
+    assert new_state["date"] == "2026-07-04"
+    assert "12" not in new_state.get("snapshots", {})  # 새로 시작(전날 것 안 이어받음)
