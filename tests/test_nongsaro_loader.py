@@ -97,6 +97,22 @@ def test_build_unknown_slug_raises(tmp_path, monkeypatch):
         loader.build(only="not_a_real_slug")
 
 
+def test_fetch_detail_xml_does_not_cache_invalid_response(tmp_path, monkeypatch):
+    """API가 200과 함께 비XML(에러 페이지 등)을 주면 캐시에 쓰지 않고 RuntimeError로 중단."""
+    corpus_dir = tmp_path / "nongsaro"
+    cache_dir = corpus_dir / ".api_cache"
+    monkeypatch.setattr(loader, "CORPUS_DIR", corpus_dir)
+    monkeypatch.setattr(loader, "CACHE_DIR", cache_dir)
+    monkeypatch.setattr(loader, "_api_key", lambda: "dummy")
+    monkeypatch.setattr(loader, "_http_get", lambda params: "<html>서비스 점검중입니다</html><broken")
+
+    spec = loader.DiseaseSpec(slug="leaf_mold", title="t", sick_key="D00001533")
+    with pytest.raises(RuntimeError):
+        loader._fetch_detail_xml(spec, use_cache=False)
+
+    assert not (cache_dir / "leaf_mold.xml").exists()
+
+
 def test_build_raises_on_missing_section(tmp_path, monkeypatch):
     """방제/증상/발생환경 중 하나라도 비면 잘못된 근거로 코퍼스를 채우지 않도록 중단."""
     corpus_dir = tmp_path / "nongsaro"
