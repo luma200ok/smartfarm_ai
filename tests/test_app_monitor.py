@@ -20,16 +20,19 @@ def _forecast_success(date_str="20260703"):
 
 
 @pytest.fixture
-def _kma_success(monkeypatch):
+def _kma_success(monkeypatch, tmp_path):
     """오늘 운영 탭이 render_live_tab()의 KMA 성공 경로(cur = ... datetime.now() 사용)를
     반드시 타도록 llm.weather·llm.expect를 mock. app/·app/views/도 sys.path에 추가
-    (monitor.py가 app/state.py·app/ui.py를 임포트하므로 — streamlit_app.py 진입점과 동일)."""
+    (monitor.py가 app/state.py·app/ui.py를 임포트하므로 — streamlit_app.py 진입점과 동일).
+    live.STATE_PATH도 tmp_path로 격리 — render_live_tab()이 이슈 #40 앱 기록 경로에서
+    실제 상태 파일(data/control_live_state.json)에 쓰지 않도록 한다."""
     import sys
     for p in (ROOT / "src", ROOT / "app", ROOT / "app" / "views"):
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
     from datetime import date as _date
 
+    from control import live as live_mod
     from llm import expect as expect_mod
     from llm import weather
 
@@ -37,6 +40,7 @@ def _kma_success(monkeypatch):
     monkeypatch.setattr(weather, "get_forecast_3d", lambda: _forecast_success(today_str))
     monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
     monkeypatch.setattr(expect_mod, "load_model", lambda force=False: None)  # 폴백 경로(외기 그대로)
+    monkeypatch.setattr(live_mod, "STATE_PATH", tmp_path / "control_live_state.json")
 
 
 def test_monitor_page_renders_without_exception_on_kma_success(_kma_success):
@@ -65,6 +69,39 @@ def test_live_trend_baseline_toggle_default_off_and_togglable(_kma_success):
 
     checkboxes[0].set_value(True).run(timeout=30)
     assert not at.exception
+
+
+def test_monitor_page_renders_partial_on_kma_fail_with_snapshots(monkeypatch, tmp_path):
+    """이슈 #40 — KMA 조회 실패라도 오늘 기록된 스냅샷이 있으면 안내 대신 과거 기록으로
+    부분 렌더된다(예외 없이 완주)."""
+    import json
+    import sys
+    from datetime import date as _date
+
+    for p in (ROOT / "src", ROOT / "app", ROOT / "app" / "views"):
+        if str(p) not in sys.path:
+            sys.path.insert(0, str(p))
+
+    from control import live as live_mod
+    from llm import weather
+
+    monkeypatch.setattr(weather, "get_forecast_3d", lambda: {"unavailable": True, "reason": "실패"})
+    monkeypatch.setattr(weather, "get_current", lambda: {"unavailable": True})
+
+    state_path = tmp_path / "control_live_state.json"
+    today_str = _date.today().isoformat()
+    state = {"date": today_str, "snapshots": {
+        "0": {"out_temp": 20.0, "out_hum": 70.0, "base_temp": 20.0, "base_hum": 70.0,
+              "ctrl_temp": 21.0, "ctrl_hum": 65.0, "devices_on": [], "events": []}}}
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(live_mod, "STATE_PATH", state_path)
+
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(MONITOR_PAGE))
+    at.run(timeout=30)
+
+    assert not at.exception, f"페이지 렌더 중 예외 발생: {[str(e) for e in at.exception]}"
 
 
 def test_monitor_module_defines_datetime_symbol_used_by_render_live_tab():

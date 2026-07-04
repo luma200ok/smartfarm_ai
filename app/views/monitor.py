@@ -477,10 +477,20 @@ def _split_events(items: list, now_hour: int) -> tuple:
     return done, planned
 
 
+def _event_dict(log) -> dict:
+    """timeline 행의 events 원소를 dict로 정규화한다 — 시뮬 행은 ControlLog(속성 접근),
+    스냅샷 복원 행(assemble_today_timeline)은 이미 dict(이슈 #40). 두 형태 모두 처리."""
+    if isinstance(log, dict):
+        return log
+    return {"device": log.device, "action": log.action, "reason": log.reason,
+            "mode": getattr(log, "mode", "auto")}
+
+
 def render_live_tab(setpoints):
     """오늘(실제 날짜) 운영 탭(이슈 #23, 레이아웃 재배치 이슈 #25) — KMA 외기+기대값
     모델로 오늘 시간대별 제어 전/후 내부 온·습도 시뮬레이션(src/control/live.py, 규칙
-    기반). KMA unavailable이면 안내 후 🧪 시뮬레이션 탭으로 유도.
+    기반). KMA unavailable이어도 오늘 기록된 스냅샷이 있으면 과거 기록만으로 부분
+    렌더하고(이슈 #40), 아예 없으면 안내 후 🧪 시뮬레이션 탭으로 유도한다.
 
     장치 카드의 자동/수동 토글·수동 ON/OFF는 세션 전용 K_LIVE_DEVICE_STATES에 반영되어
     simulate_control()에 그대로 전달된다 — 단, 이는 앱 세션 한정이며 run_notify()(서버
@@ -489,31 +499,48 @@ def render_live_tab(setpoints):
     from control.actuators import DEVICE_LABEL_KR
 
     outdoor = _cached_today_outdoor()
-    if outdoor is None:
-        unavailable("오늘 운영", "KMA 외기 조회 실패(키 미설정 또는 API 오류)")
-        st.caption("🧪 시뮬레이션 탭에서 리플레이로 동작을 확인할 수 있어요.")
-        return
-
     today = _date.today()
+    now_hour = datetime.now().hour
+
+    kma_failed = outdoor is None
+    if kma_failed:
+        today_snapshots = live_mod.load_today_snapshots(today)
+        if not today_snapshots:
+            unavailable("오늘 운영", "KMA 외기 조회 실패(키 미설정 또는 API 오류)")
+            st.caption("🧪 시뮬레이션 탭에서 리플레이로 동작을 확인할 수 있어요.")
+            return
+
     states = _get_live_device_states()
-    baseline = live_mod.indoor_baseline(outdoor, date=today)
     # simulate_control()은 전달받은 states를 시간대별로 in-place mutate한다 — 세션 원본
     # states를 그대로 넘기면 다음 리런의 "0시 시작" 상태가 직전 리런의 "23시 결과"로
     # 오염돼 auto 장치 타임라인이 리런마다 드리프트한다(P1). 시뮬용 사본을 deepcopy로
     # 분리해 세션에는 사용자가 조작한 auto/수동 값만 남긴다 — 카드 표시·토글은 원본 states.
     sim_states = deepcopy(states)
-    # 자정 연속성(이슈 #35) — run_notify()가 남긴 상태 파일의 last_ctrl을 시드로 이어받아
-    # 앱·타이머 양쪽이 같은 0시 시작값을 쓰게 맞춘다(읽기 실패해도 예외 전파 없이 폴백).
-    initial_ctrl = live_mod.load_last_ctrl()
-    timeline = live_mod.simulate_control(baseline, setpoints, sim_states, date=today,
-                                          initial_ctrl=initial_ctrl, fallback_clamp=True)
+    timeline = live_mod.assemble_today_timeline(outdoor, setpoints, sim_states, today, now_hour)
     emg = live_mod.emergency_hours(timeline, setpoints)
 
     if not timeline:
         st.caption("오늘 시간대별 데이터가 없어요.")
         return
 
-    now_hour = datetime.now().hour
+    if kma_failed:
+        alert_box("주의", "KMA 예보 조회 실패 — 과거 기록만 표시 중")
+
+    # 앱 기록(이슈 #40) — 현재 시각 스냅샷이 아직 없고 전 장치가 자동일 때만 기록한다.
+    # 수동 조작 세션의 값이 영구 기록에 섞여 들어가는 걸 막기 위함.
+    if not kma_failed:
+        cur_hour_row = next((t for t in timeline if t["hour"] == now_hour), None)
+        all_auto = all(state.auto for state in states.values())
+        if cur_hour_row is not None and all_auto:
+            state_file = live_mod._load_state()
+            same_day = state_file.get("date") == today.isoformat()
+            if not same_day:
+                state_file = {"date": today.isoformat(), "fail_count": 0,
+                              "devices": {}, "emergency_hours": [], "last_ctrl": None,
+                              "version": 2, "snapshots": {}}
+            if live_mod.record_snapshot(state_file, cur_hour_row, source="app"):
+                live_mod._save_state(state_file)
+
     cur = next((t for t in timeline if t["hour"] == now_hour), timeline[-1])
     devices_on_label = ", ".join(DEVICE_LABEL_KR.get(d, d) for d in cur["devices_on"]) or "-"
 
@@ -526,7 +553,8 @@ def render_live_tab(setpoints):
         ("실내 온도(제어)", _fmt(cur["ctrl_temp"], "℃"), None),
         ("작동 중 장치", devices_on_label, None),
     ])
-    st.caption("🔮 지금 이후 값은 기상청(KMA) 예보 기반 예측이에요 — 매시 자동 갱신돼요.")
+    if not kma_failed:
+        st.caption("🔮 지금 이후 값은 기상청(KMA) 예보 기반 예측이에요 — 매시 자동 갱신돼요.")
 
     render_setpoints(setpoints)
     render_live_devices(states, cur["devices_on"])
@@ -555,8 +583,8 @@ def render_live_tab(setpoints):
         st.caption("점선 구간 = 예보 기반 예측")
 
     events = [{"hour": t["hour"], "시간": f"{t['hour']:02d}시",
-               "장치": DEVICE_LABEL_KR.get(log.device, log.device),
-               "동작": log.action, "사유": log.reason}
+               "장치": DEVICE_LABEL_KR.get(_event_dict(log)["device"], _event_dict(log)["device"]),
+               "동작": _event_dict(log)["action"], "사유": _event_dict(log)["reason"]}
               for t in timeline for log in t["events"]]
     events_done, events_planned = _split_events(events, now_hour)
 
