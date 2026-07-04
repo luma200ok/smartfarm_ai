@@ -7,9 +7,7 @@ run_notify()는 서버 타이머(1시간 간격, systemd timer)에서 호출되�
 파일 기반이라 앱·타이머 프로세스가 상태를 공유한다).
 """
 import argparse
-import json
 import logging
-import os
 from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +18,8 @@ ROOT = _SRC.parent
 _log = logging.getLogger(__name__)
 
 STATE_PATH = ROOT / "data" / "control_live_state.json"
+HISTORY_PATH = ROOT / "data" / "control_history.json"
+HISTORY_MAX_DAYS = 30  # 아카이브 보존 기간(archive_snapshots)
 
 # 물리 클램프(이슈 #27) — 효과가 시간당 상수(EFFECTS_HOURLY)로 커진 만큼, 극단적인 연속
 # ON에도 ctrl_temp/ctrl_hum이 비현실적으로 발산하지 않도록 base 대비 편차를 제한한다.
@@ -164,7 +164,8 @@ def _clamp_into_band(value, low: float, high: float, deadband: float):
 
 def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
                       initial_ctrl: "dict | None" = None,
-                      fallback_clamp: bool = False) -> "list[dict]":
+                      fallback_clamp: bool = False,
+                      seed_ctrl: "tuple[float | None, float | None] | None" = None) -> "list[dict]":
     """시간 순 재생 — controller.decide() 재사용, ON 장치 효과(시간 환산)를 다음 시간
     내부값에 반영해 "제어 후" 내부온·습도를 산출한다.
 
@@ -181,6 +182,13 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
       클램프한다 — 기준선이 밴드 밖이어도 0시 ctrl은 밴드 안에서 시작.
     - 둘 다 아니면(기본값, `fallback_clamp=False`) 기존 거동(기준선 그대로 시작) 유지 —
       순수 시뮬레이션/리플레이·기존 테스트 무회귀용 기본값.
+
+    `seed_ctrl`(이슈 #40, 오늘 스냅샷 경계 합성 전용) — `(ctrl_temp, ctrl_hum)` 튜플이
+    주어지면 위 initial_ctrl 유효성 검증(어제-전용)을 거치지 않고 0시(baseline 첫 항목)
+    시작값으로 그대로 사용한다 — 과거 스냅샷의 마지막 기록에서 미래 구간을 이어 합성할 때,
+    baseline이 "오늘의 남은 시간대"만 담아 idx 0이 실제로는 자정이 아니기 때문. 기본값
+    None이면 기존 initial_ctrl/fallback_clamp 경로가 그대로 동작(완전 무회귀). run_notify는
+    seed_ctrl을 사용하지 않는다(위 initial_ctrl 불변식 유지).
 
     제어 관성(누적) 방식(이슈 #27 리뷰 P2-1/2-2 픽스) — 매 시간 baseline으로 재기준하지
     않고, 이전 제어 결과(ctrl_prev)에 외기 변화분(base_next-base_prev)과 장치 효과
@@ -212,6 +220,9 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
         if initial_ctrl.get("date") == yesterday_str:
             seed_temp = initial_ctrl.get("temp")
             seed_hum = initial_ctrl.get("hum")
+
+    if seed_ctrl is not None:  # 명시 시드가 최우선(경계 합성 전용, 위 유효성 검증 우회)
+        seed_temp, seed_hum = seed_ctrl
 
     timeline = []
     ctrl_temp = None
@@ -325,16 +336,142 @@ def _emergency_key(item: dict) -> str:
     return f"{item['hour']}:{item['kind']}"
 
 
+# ── 오늘 시간별 스냅샷(이슈 #40) — KMA가 최신 발표분 이후 시간대만 제공해 저녁이 될수록
+# 과거 시간대를 잃는 문제를 상태 파일에 시간별 기록을 누적해 해결한다.
+# 과거=기록된 스냅샷 그대로, 현재·미래=예보 합성(assemble_today_timeline) ────────────
+
+def _serialize_events(logs: list) -> "list[dict]":
+    """timeline 행의 events(ControlLog 목록 또는 이미 dict인 스냅샷 복원값)를 JSON
+    직렬화 가능한 dict 목록으로 통일한다."""
+    out = []
+    for log in logs:
+        if isinstance(log, dict):
+            out.append(log)
+        else:
+            out.append({"device": log.device, "action": log.action,
+                        "reason": log.reason, "mode": getattr(log, "mode", "auto")})
+    return out
+
+
+def record_snapshot(state: dict, item: dict, source: str = "sim") -> bool:
+    """timeline 행(item)을 state["snapshots"][str(hour)]에 기록한다 — first-write-wins
+    (이미 기록돼 있으면 덮지 않고 False 반환, 과거 기록의 불변성을 보장). state는 in-place로
+    수정된다(호출부가 저장 여부를 결정)."""
+    hour = item["hour"]
+    snapshots = state.setdefault("snapshots", {})
+    key = str(hour)
+    if key in snapshots:
+        return False
+    snapshots[key] = {
+        "out_temp": item.get("out_temp"), "out_hum": item.get("out_hum"),
+        "base_temp": item.get("base_temp"), "base_hum": item.get("base_hum"),
+        "ctrl_temp": item.get("ctrl_temp"), "ctrl_hum": item.get("ctrl_hum"),
+        "devices_on": list(item.get("devices_on") or []),
+        "events": _serialize_events(item.get("events") or []),
+        "source": source,
+        "recorded_at": datetime.now().isoformat(),
+    }
+    state["version"] = 2
+    return True
+
+
+def load_today_snapshots(today: "_date | None" = None) -> dict:
+    """오늘 날짜의 스냅샷 dict({"14": {...}, ...}) — 상태 파일 date가 today와 다르면
+    빈 dict. 호출부(assemble_today_timeline 등)가 상태 파일 내부 포맷에 직접 결합되지
+    않도록 하는 공개 API(load_last_ctrl과 동일한 취지)."""
+    today = today or datetime.now().date()
+    state = _load_state()
+    if state.get("date") != today.isoformat():
+        return {}
+    return state.get("snapshots", {})
+
+
+def _snapshot_to_row(hour: int, snap: dict) -> dict:
+    """저장된 스냅샷 1건을 simulate_control() 타임라인 행과 동일한 포맷으로 복원한다."""
+    return {
+        "hour": hour,
+        "out_temp": snap.get("out_temp"), "base_temp": snap.get("base_temp"),
+        "ctrl_temp": snap.get("ctrl_temp"), "out_hum": snap.get("out_hum"),
+        "base_hum": snap.get("base_hum"), "ctrl_hum": snap.get("ctrl_hum"),
+        "devices_on": list(snap.get("devices_on") or []),
+        "events": list(snap.get("events") or []),
+    }
+
+
+def archive_snapshots(prev_state: dict) -> None:
+    """날짜가 바뀔 때 직전 날짜의 스냅샷을 data/control_history.json에 이관한다
+    ({prev_date: snapshots} 병합) — 최근 HISTORY_MAX_DAYS일만 보존. prev_state에
+    date·snapshots가 없으면 아무 것도 하지 않는다(예외 전파 없음)."""
+    from control import state_io
+
+    prev_date = prev_state.get("date")
+    snapshots = prev_state.get("snapshots")
+    if not prev_date or not snapshots:
+        return
+
+    history = state_io.load_json(HISTORY_PATH)
+    history[prev_date] = snapshots
+    if len(history) > HISTORY_MAX_DAYS:
+        keep_keys = sorted(history.keys())[-HISTORY_MAX_DAYS:]
+        history = {k: history[k] for k in keep_keys}
+    state_io.save_json_atomic(HISTORY_PATH, history)
+
+
+def assemble_today_timeline(outdoor: "list[dict] | None", setpoints, states, today: "_date",
+                             now_hour: int) -> "list[dict]":
+    """오늘 타임라인 조립(이슈 #40) — 과거(hour < now_hour)는 기록된 스냅샷으로 복원하고,
+    현재·미래(hour >= now_hour)는 그 구간 outdoor로 새로 합성한다. 전달받은 states는
+    복사본으로만 사용해 호출부의 원본을 변형하지 않는다.
+
+    outdoor=None(KMA 실패)이면 과거 스냅샷 행만 반환한다(빈 리스트일 수 있음).
+    """
+    from copy import deepcopy
+
+    snapshots = load_today_snapshots(today)
+    past_hours = sorted(int(h) for h in snapshots if int(h) < now_hour)
+    past_rows = [_snapshot_to_row(h, snapshots[str(h)]) for h in past_hours]
+
+    if outdoor is None:
+        return past_rows
+
+    # 기록 없는 과거 시간 — outdoor(예보)에 남아 있으면 시뮬값으로 폴백, 없으면 결측 생략.
+    recorded_hours = set(int(h) for h in snapshots)
+    missing_past_outdoor = [o for o in outdoor
+                             if o["hour"] < now_hour and o["hour"] not in recorded_hours]
+    if missing_past_outdoor:
+        missing_baseline = indoor_baseline(missing_past_outdoor, date=today)
+        missing_rows = simulate_control(missing_baseline, setpoints, deepcopy(states),
+                                         date=today, fallback_clamp=True)
+        past_rows.extend(missing_rows)
+        past_rows.sort(key=lambda r: r["hour"])
+
+    future_outdoor = [o for o in outdoor if o["hour"] >= now_hour]
+    if not future_outdoor:
+        return past_rows
+
+    future_baseline = indoor_baseline(future_outdoor, date=today)
+    seed_ctrl = None
+    if past_hours:
+        last_snap = snapshots[str(past_hours[-1])]
+        seed_ctrl = (last_snap.get("ctrl_temp"), last_snap.get("ctrl_hum"))
+
+    if seed_ctrl is not None:
+        future_rows = simulate_control(future_baseline, setpoints, deepcopy(states),
+                                        date=today, seed_ctrl=seed_ctrl)
+    else:
+        # 스냅샷이 하나도 없으면 기존 경로(load_last_ctrl 시드 + fallback_clamp=True)와 동일 거동.
+        initial_ctrl = load_last_ctrl()
+        future_rows = simulate_control(future_baseline, setpoints, deepcopy(states),
+                                        date=today, initial_ctrl=initial_ctrl, fallback_clamp=True)
+
+    return past_rows + future_rows
+
+
 # ── 상태 파일 (data/control_live_state.json) — 세션이 아닌 파일 기반 dedup ──────────
 
 def _load_state() -> dict:
-    if not STATE_PATH.exists():
-        return {}
-    try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    from control import state_io
+    return state_io.load_json(STATE_PATH)
 
 
 def load_last_ctrl() -> "dict | None":
@@ -346,14 +483,8 @@ def load_last_ctrl() -> "dict | None":
 
 def _save_state(state: dict) -> None:
     """setpoints.save()와 동일한 원자적 쓰기 패턴 — 실패해도 예외 전파 없음."""
-    try:
-        STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = STATE_PATH.with_suffix(STATE_PATH.suffix + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, STATE_PATH)
-    except OSError:
-        return
+    from control import state_io
+    state_io.save_json_atomic(STATE_PATH, state)
 
 
 def _device_embed(transitions: dict, date_str: str) -> dict:
@@ -422,10 +553,16 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
         if fail_count >= _FAIL_ALERT_THRESHOLD:
             if _emit(_kma_unavailable_embed("KMA 외기 조회 연속 실패", date_str)):
                 sent += 1
+        if not same_day and prev_state.get("date"):
+            archive_snapshots(prev_state)
         new_state = {"date": date_str, "fail_count": fail_count,
                      "devices": prev_state.get("devices", {}) if same_day else {},
                      "emergency_hours": prev_state.get("emergency_hours", []) if same_day else [],
-                     "last_ctrl": prev_state.get("last_ctrl")}
+                     "last_ctrl": prev_state.get("last_ctrl"),
+                     "version": 2,
+                     # snapshots도 보존 — KMA 실패로 판정을 못 해도 이미 기록된 오늘 스냅샷은
+                     # 유실되면 안 된다(과거 픽스 전엔 new_state에서 빠져 유실되던 버그).
+                     "snapshots": prev_state.get("snapshots", {}) if same_day else {}}
         if not dry_run:
             _save_state(new_state)
         return sent
@@ -476,8 +613,20 @@ def run_notify(dry_run: bool = False, today: "_date | None" = None, now: "dateti
 
     last_ctrl = ({"date": date_str, "hour": cur_item["hour"], "temp": cur_item["ctrl_temp"],
                   "hum": cur_item["ctrl_hum"]} if cur_item else prev_state.get("last_ctrl"))
+
+    # 시간별 스냅샷 누적(이슈 #40) — 같은 날이면 직전 상태의 snapshots를 이어받고, 날짜가
+    # 바뀌면 그 전날 것을 history로 아카이브한 뒤 새로 시작한다.
+    if same_day:
+        snapshots = dict(prev_state.get("snapshots", {}))
+    else:
+        if prev_state.get("date"):
+            archive_snapshots(prev_state)
+        snapshots = {}
     new_state = {"date": date_str, "fail_count": 0, "devices": cur_devices,
-                 "emergency_hours": sorted(cur_emg_keys), "last_ctrl": last_ctrl}
+                 "emergency_hours": sorted(cur_emg_keys), "last_ctrl": last_ctrl,
+                 "version": 2, "snapshots": snapshots}
+    if cur_item:
+        record_snapshot(new_state, cur_item, source="sim")
     if not dry_run:
         _save_state(new_state)
     return sent

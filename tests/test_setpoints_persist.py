@@ -83,7 +83,8 @@ def test_save_write_failure_is_swallowed(tmp_path, monkeypatch):
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(setpoints_mod.os, "replace", _boom)
+    from control import state_io
+    monkeypatch.setattr(state_io.os, "replace", _boom)
     save(Setpoints(), path)  # 예외 없이 반환되어야 함
     assert not path.exists()
 

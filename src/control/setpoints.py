@@ -1,6 +1,4 @@
 """제어 설정 밴드 — 온도·습도 상/하한 + 히스테리시스 데드밴드(채터링 방지)."""
-import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +45,8 @@ def save(sp: "Setpoints", path: "Path | None" = None) -> None:
     서버 권한·디스크 문제로 쓰기 실패 시 예외를 전파하지 않고 조용히 반환한다
     (세션 값은 이미 반영돼 있으므로 UI는 계속 동작 — 이슈 #21 P2-1).
     """
+    from control import state_io
+
     target = Path(path) if path is not None else SETPOINTS_PATH
     data = {
         "temp_low": sp.temp_low,
@@ -54,32 +54,26 @@ def save(sp: "Setpoints", path: "Path | None" = None) -> None:
         "hum_low": sp.hum_low,
         "hum_high": sp.hum_high,
     }
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = target.with_suffix(target.suffix + ".tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, target)
-    except OSError:
-        return
+    state_io.save_json_atomic(target, data)
 
 
 def load(path: "Path | None" = None) -> "Setpoints":
     """파일 없음·손상·키 누락 시 기본값 폴백(예외 전파 없음)."""
+    from control import state_io
+
     target = Path(path) if path is not None else SETPOINTS_PATH
     default = Setpoints()
-    if not target.exists():
+    raw = state_io.load_json(target)
+    if not raw:
         return default
     try:
-        with open(target, "r", encoding="utf-8") as f:
-            raw = json.load(f)
         sp = Setpoints(
             temp_low=float(raw["temp_low"]),
             temp_high=float(raw["temp_high"]),
             hum_low=float(raw["hum_low"]),
             hum_high=float(raw["hum_high"]),
         )
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError, OSError):
+    except (KeyError, TypeError, ValueError):
         return default
     return _validate(sp)
 
