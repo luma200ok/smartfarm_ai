@@ -91,7 +91,7 @@ def _http_get(params: dict) -> str:
     try:
         with urllib.request.urlopen(url, timeout=15) as r:  # noqa: S310 (신뢰된 공공 API)
             return r.read().decode("utf-8")
-    except urllib.error.URLError as e:
+    except (urllib.error.URLError, UnicodeDecodeError) as e:
         raise RuntimeError(f"NCPMS API 호출 실패: {e}") from e
 
 
@@ -118,6 +118,12 @@ def _fetch_detail_xml(spec: DiseaseSpec, use_cache: bool = True) -> str:
         "serviceCode": NCPMS_SVC_DETAIL,
         "sickKey": spec.sick_key,
     })
+    try:
+        ET.fromstring(raw)
+    except ET.ParseError as e:
+        raise RuntimeError(
+            f"{spec.slug}: NCPMS 응답이 XML이 아님(에러 페이지 등으로 추정) — 캐시에 쓰지 않고 중단: {e}"
+        ) from e
     cache_path.write_text(raw, encoding="utf-8")
     return raw
 
