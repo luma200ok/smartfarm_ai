@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-04** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-04(스냅샷 누적 PR #41 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -39,6 +39,7 @@
 | DB(선택) | PostgreSQL16+pgvector — `RAG_BACKEND=pgvector`·`DATABASE_URL` 설정 시만 사용(기본은 `memory`, npz+무이력 그대로). RAG 검색 저장 + 처방/경보 이력. 미설정·장애 시 자동 폴백 |
 
 ## 📌 다음 작업 (백로그 — roadmap "향후 확장" 참조)
+- [x] **관제 시간별 스냅샷 누적**(이슈 #40 클로즈): KMA 예보가 과거 시간대를 안 줘 오늘 차트가 "지금~24시"로 퇴화 → 매시 스냅샷(first-write-wins, 상태 파일 v2 `snapshots`) 누적 + 타임라인 과거=기록·미래=예보 시뮬 합성(`assemble_today_timeline`·`seed_ctrl`) + KMA 실패 시 과거 기록 부분 렌더 + 롤오버 시 `data/control_history.json` 30일 아카이브(추후 실 센서 일별 이력 호환, source 필드) + 원자적 쓰기 `state_io.py` 공용화 — 배포 완료 (PR #41). 후속: 상태 파일 동시 쓰기 레이스(P2)·부분 렌더 기준 시각 라벨(P2)·실 센서 어댑터
 - [x] **습도 기대값 회귀·차트 토글·사전경보 분리**(이슈 #37·#38 클로즈): 실내 습도를 외기+10%p 근사→학습 모델(GKF MAE 7.39%p, 온도 무회귀)로 교체, 비제어 라인 기본 숨김+비교 토글·범례 새 네이밍, 디스코드 현재=🚨긴급/미래=🔮사전 경보 요약/과거 미발송 — 모델 push_models.sh 배포·실검증 (PR #39). 후속 스타일: 차트 실행=빨강 실선·계획=회색 점선(207e513)
 - [x] **관제 차트 정합·자정 연속성**(이슈 #35 클로즈): 제어 후 미래 구간 점선(계획) 분리·축 라벨 잘림 수정 + 타이머가 매시 last_ctrl 기록 → 0시가 어제 제어 값에서 이어짐(멱등성 보장, 폴백=밴드 클램프) (PR #36)
 - [x] **날씨 인지 1단계**(이슈 #6): 기상청 API + get_weather + 날씨 Q&A + 앱 외기 데모 (PR #9·#11)
