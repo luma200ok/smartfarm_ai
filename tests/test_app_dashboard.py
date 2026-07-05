@@ -215,24 +215,33 @@ def test_render_metric_cards_humidity_chip_thresholds_apply_on_fallback_path(mon
     assert hum_item["chip_level"] == "danger"
 
 
-def test_render_metric_cards_humidity_chip_danger_on_live_path(monkeypatch):
-    """습도 칩 임계 판정은 live(제어 후) 경로에서도 동일 소스(HUM_WARN/CRIT)를 쓴다."""
+def test_render_metric_cards_humidity_chip_band_based_on_live_path(monkeypatch):
+    """습도 칩도 live(제어 후) 경로에선 온도 칩과 대칭으로 밴드(setpoints) 기준으로 판정한다
+    (이슈 #55) — 경보 배너가 밴드 hum_high 기준으로 바뀌면서 80~85% 구간에서 배너=경고·
+    카드=정상으로 어긋나던 것을 해소. danger는 배너가 담당하므로 칩은 온도와 동일하게 주의까지."""
     dashboard_mod = _import_dashboard_module()
     from control.setpoints import Setpoints
 
     _patch_forecast(monkeypatch, None)
     captured = {}
-    monkeypatch.setattr(dashboard_mod, "kpi_cards", lambda items: captured.setdefault("items", items))
+    # 이 테스트는 render를 2번 호출하므로 setdefault가 아니라 매번 덮어써야 한다.
+    monkeypatch.setattr(dashboard_mod, "kpi_cards", lambda items: captured.update(items=items))
 
+    # hum_high=80. 82%는 구 병해임계(85)로는 '정상'이었지만 밴드(80) 기준으론 '주의'여야 함(#55 핵심).
     vs = _FakeVS({"온도내부_평균": 99.0, "습도내부_평균": 10.0, "온도외부_평균": 99.0, "co2_평균": 500.0})
-    live = {"ctrl_temp": 22.0, "ctrl_hum": 92.0, "out_temp": 18.0,
+    live = {"ctrl_temp": 22.0, "ctrl_hum": 82.0, "out_temp": 18.0,
             "today": date.today(), "setpoints": Setpoints()}
-
     dashboard_mod.render_metric_cards(vs, live)
-
     hum_item = captured["items"][1]
-    assert hum_item["value"] == "92"
-    assert hum_item["chip_level"] == "danger"
+    assert hum_item["value"] == "82"
+    assert hum_item["chip_level"] == "warn"          # 구 85 병해임계였다면 'ok'였을 값
+    assert "밴드" in hum_item["chip"]
+
+    # 밴드 안(70%)이면 칩 없음/정상
+    dashboard_mod.render_metric_cards(vs, {**live, "ctrl_hum": 70.0})
+    hum_in = captured["items"][1]
+    assert hum_in["chip_level"] == "ok"
+    assert hum_in["chip"] is None
 
 
 # ── render_alert_banner (이슈 #51 — 관제 제어 후 값 기준 경보) ──────────────
