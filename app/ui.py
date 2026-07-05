@@ -163,6 +163,43 @@ def inject_css():
     [data-testid="stVerticalBlockBorderWrapper"] {{ border-color: var(--sf-line) !important; }}
     .stApp hr {{ border-color: var(--sf-line) !important; }}
 
+    /* ── 네이티브 텍스트 가독성(이슈 #48 P2) ──
+       config.toml이 base="dark"+textColor(다크용 밝은 회색 #E9F2EA)로 고정돼 있어(런타임
+       스위치 API 없음), 라이트 토글 시에도 본문 markdown·위젯 라벨·st.metric·st.table 텍스트가
+       그 밝은 회색 그대로 남아 흰 배경에서 안 보였다(사용자 리포트 — "라이트에서 글자가
+       회색이라 안 보인다"). 네이티브 텍스트 대부분은 [data-testid="stMarkdownContainer"]로
+       감싸여 나오므로 그 안을 --sf-ink로 강제 오버라이드한다.
+       - 이미 자체 색을 갖는 커스텀 .sf-* 컴포넌트(sf-chip/sf-kpi-label/sf-header-cap 등)는
+         클래스에 "sf-"가 포함돼 있으면 :not([class*="sf-"])로 제외해 건드리지 않는다.
+       - st.table·st.metric은 별도 testid라 각각 명시. 캡션(stCaptionContainer)은 markdown
+         컨테이너 밖이라 이 블록과 겹치지 않는다(기존 규칙 그대로 --sf-mut 유지).
+       - 탭 라벨은 아래 별도 규칙으로 제외한다(리뷰 P1 픽스 — 이슈 #48). */
+    [data-testid="stMarkdownContainer"]:not([class*="sf-"]),
+    [data-testid="stMarkdownContainer"] *:not([class*="sf-"]),
+    [data-testid="stMetricLabel"], [data-testid="stMetricLabel"] *,
+    [data-testid="stMetricValue"], [data-testid="stMetricValue"] *,
+    [data-testid="stTable"] td {{
+        color: var(--sf-ink) !important;
+    }}
+    [data-testid="stTable"] th {{ color: var(--sf-mut) !important; }}
+
+    /* 탭 라벨 색 회귀 픽스(리뷰 P1, 이슈 #48) — Streamlit 탭은
+       <button data-baseweb="tab"><div data-testid="stMarkdownContainer"><p>라벨</p></div></button>
+       구조라, 위 "[data-testid=stMarkdownContainer] *" 규칙이 <p>에 "직접" 매치돼 버튼의
+       color(선택=흰색/비선택=accent)를 상속받지 못하게 막아버린다 — 상속 vs 직접매치는
+       specificity/소스순서와 무관하게 항상 직접매치가 이기므로(캐스케이드 오해로 인한 P1),
+       탭 내부 markdown 요소만 더 높은 specificity(.stTabs+attr+attr+*)로 "부모 color를
+       상속"하도록 되돌려 버튼의 기존 색 규칙이 다시 적용되게 한다.
+       주의(2차 픽스) — 처음엔 "[data-testid=stMarkdownContainer] *"만 넣었더니 여전히
+       ink로 보였다: 컨테이너 div 자신은 위 첫 블록의 "[data-testid=stMarkdownContainer]
+       :not(...)"(컨테이너 자체를 직접 매치)에 그대로 걸려 ink가 되고, <p>는 "그 div"를
+       상속하니 결국 ink가 이어졌다(브라우저로 직접 렌더 검증해서 잡음). 그래서 컨테이너
+       자신도 함께 inherit 대상에 넣어야 한다. */
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"],
+    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] * {{
+        color: inherit !important;
+    }}
+
     /* 기존 탭 스타일 — 새 톤으로 유지 */
     .stTabs [data-baseweb="tab-list"] {{ gap: 12px; }}
     .stTabs [data-baseweb="tab"] {{
@@ -170,7 +207,7 @@ def inject_css():
         font-weight: 700;
         padding: 12px 24px;
         background-color: var(--sf-accent-soft);
-        color: var(--sf-accent);
+        color: var(--sf-accent) !important;
         border-radius: 10px 10px 0 0;
     }}
     .stTabs [aria-selected="true"] {{

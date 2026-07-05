@@ -24,7 +24,7 @@ from state import (K_CONTROL_ACTIVE, K_CONTROL_LAST_DATE, K_CONTROL_LOG,
                     K_CONTROL_YEAR, K_DEVICE_STATES, K_DISCORD_CONTROL_TOGGLE,
                     K_LIVE_DEVICE_STATES, K_RECENT_READINGS, K_SETPOINTS,
                     get_vsensor)
-from ui import alert_box, metric_row, page_header, section, unavailable
+from ui import alert_box, current_theme, metric_row, page_header, section, unavailable
 
 _MAX_RECENT = 10       # emergency() 판정에 필요한 3틱보다 여유 있게 보관
 _MAX_LOG_ROWS = 30      # 제어 로그 테이블 최근 N건만 표시
@@ -378,6 +378,16 @@ _TREND_PALETTE = ["#1f77b4", "#7f7f7f", "#d62728", "#2ca02c", "#9467bd"]
 _EXEC_COLOR = "#d62728"
 _PLANNED_COLOR = "#9e9e9e"
 
+# 차트 배경/축 팔레트(이슈 #48) — dashboard.py의 _CHART_PALETTE와 동일 톤(ui.py _DARK/_LIGHT와
+# 맞춤). 계열 색(_TREND_PALETTE 등)은 테마와 무관하게 고정하고, 배경·그리드·축 라벨만 테마를
+# 따라간다. Streamlit이 config.toml의 다크 base를 Vega 차트에도 그대로 입혀 라이트 토글 시
+# 차트 배경만 어둡게 남던 버그(P2)를 dashboard.py와 동일 패턴(.configure(background=...))으로
+# 고친다.
+_TREND_BG_PALETTE = {
+    "dark": {"bg": "#0F1C15", "grid": "#1C2C22", "axis_text": "#6F8577"},
+    "light": {"bg": "#FFFFFF", "grid": "#EEF1EA", "axis_text": "#9AA891"},
+}
+
 
 def _split_control_segments(long_df, value_cols: list, split_col: "str | None", now_hour: int):
     """실행/계획 세그먼트 분리(이슈 #35) — _live_trend_chart()에서 추출한 순수 로직
@@ -476,9 +486,28 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
         color="crimson", strokeDash=[4, 2], strokeWidth=2
     ).encode(x="hour:Q")
 
+    # 이슈 #48 — 라이트 토글 시 차트 배경만 다크로 남던 버그 수정(dashboard.py의
+    # _recent_trend_chart와 동일 패턴). 배경·뷰·축 그리드/라벨 색을 현재 테마로 명시한다.
+    bg_pal = _TREND_BG_PALETTE.get(current_theme(), _TREND_BG_PALETTE["dark"])
+
     return (forecast_band + lines + bounds + now_rule).properties(
         height=300, padding={"left": 5, "right": 5, "top": 5, "bottom": 20},
-    ).configure_axisX(titlePadding=12).interactive()
+    ).configure(
+        background=bg_pal["bg"],
+    ).configure_view(
+        strokeWidth=0, fill=bg_pal["bg"],
+    ).configure_axisX(
+        titlePadding=12, gridColor=bg_pal["grid"], domain=False,
+        labelColor=bg_pal["axis_text"], titleColor=bg_pal["axis_text"],
+    ).configure_axisY(
+        gridColor=bg_pal["grid"], domain=False,
+        labelColor=bg_pal["axis_text"], titleColor=bg_pal["axis_text"],
+    ).configure_legend(
+        # 이슈 #48 P2 부수 발견 — 범례는 캔버스 렌더링이라 CSS로 못 고치고 Vega config로만
+        # 가능하다. 축과 같은 톤(axis_text)을 안 주면 Streamlit 기본(다크 textColor)이 남아
+        # 라이트에서 범례 글자가 거의 안 보였다(축은 이미 위에서 처리돼 있었음).
+        labelColor=bg_pal["axis_text"], titleColor=bg_pal["axis_text"],
+    ).interactive()
 
 
 def _split_events(items: list, now_hour: int) -> tuple:

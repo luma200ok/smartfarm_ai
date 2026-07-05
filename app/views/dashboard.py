@@ -11,7 +11,16 @@
 
 딥그린 다크 기본/라이트 토글 확장(이슈 #47 2차) — 차트 색은 ui.current_theme()에 따라
 다크(밝은 그린 #5FD08A·짙은 배경 그리드)/라이트(진한 그린 #3F7D23·옅은 그리드)로 갈아 낀다.
+
+이슈 #48 — 핵심 지표를 가상센서 원본이 아니라 "관제 오늘 운영(제어 후)" 값으로 연결한다.
+monitor.py의 render_live_tab()과 동일하게 control/live.today_outdoor()(KMA)+
+assemble_today_timeline()으로 오늘 제어 후 내부 온·습도·외기를 계산해 KPI 카드에 쓴다.
+KMA 키 미설정(로컬/CI)·조회 실패·timeline 없음이면 조용히 가상센서 원본 경로로 폴백한다
+(이슈 #10 C4 — 대시보드는 어떤 경우도 크래시하지 않아야 함). CO₂는 KMA에 없으므로
+가상센서(vs.reading()) 값을 그대로 쓴다(사용자 확정).
 """
+from datetime import date as _date
+from datetime import datetime
 from pathlib import Path
 import sys
 
@@ -32,6 +41,50 @@ _CHART_PALETTE = {
     "dark": {"accent": "#5FD08A", "bg": "#0F1C15", "grid": "#1C2C22", "axis_text": "#6F8577"},
     "light": {"accent": "#3F7D23", "bg": "#FFFFFF", "grid": "#EEF1EA", "axis_text": "#9AA891"},
 }
+
+
+@st.cache_data(ttl=60)
+def _cached_today_outdoor():
+    """control.live.today_outdoor() UI 반복 방어층 — monitor.py의 _cached_today_outdoor()와
+    동일 이유(이슈 #29 P2)로 대시보드 쪽에도 60s 캐시를 씌운다. rerun마다 동기 KMA 호출이
+    반복 블로킹되는 걸 막는다."""
+    from control import live as live_mod
+    return live_mod.today_outdoor()
+
+
+def _today_live_kpi():
+    """관제 오늘 운영(제어 후) KPI — monitor.py의 render_live_tab()과 동일 방식으로 오늘
+    타임라인을 조립해 현재 시각의 제어 후 내부 온·습도·외기를 계산한다(이슈 #48).
+
+    대시보드는 세션별 수동 조작(장치 카드 토글)을 반영할 필요가 없으므로 시뮬 상태는 항상
+    default_states()(전체 자동)로 고정한다 — render_live_tab()과 달리 세션 K_LIVE_DEVICE_STATES는
+    쓰지 않는다.
+
+    KMA 미설정·조회 실패·timeline 없음·필요 값 결측이면 None을 반환해 호출측이 가상센서
+    원본으로 폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다)."""
+    try:
+        from control import live as live_mod
+        from control.actuators import default_states
+        from control.setpoints import load as load_setpoints
+
+        outdoor = _cached_today_outdoor()
+        if outdoor is None:
+            return None
+        today = _date.today()
+        now_hour = datetime.now().hour
+        setpoints = load_setpoints()
+        timeline = live_mod.assemble_today_timeline(
+            outdoor, setpoints, default_states(), today, now_hour)
+        if not timeline:
+            return None
+        cur = next((t for t in timeline if t["hour"] == now_hour), timeline[-1])
+        ctrl_temp, ctrl_hum, out_temp = cur.get("ctrl_temp"), cur.get("ctrl_hum"), cur.get("out_temp")
+        if ctrl_temp is None or ctrl_hum is None or out_temp is None:
+            return None
+        return {"ctrl_temp": ctrl_temp, "ctrl_hum": ctrl_hum, "out_temp": out_temp,
+                "today": today, "setpoints": setpoints}
+    except Exception:
+        return None
 
 
 def _latest_vsensor():
@@ -78,30 +131,46 @@ def render_alert_banner(vs):
                      severity_label=a["level"])
 
 
-def render_metric_cards(vs):
+def render_metric_cards(vs, live=None):
     """내부온도/습도/CO2/외기 KPI 카드 4장 — 다음날 LSTM 예측·습도 상한은 상태 칩으로 표현.
 
     (이슈 #47) 예전엔 "내일 예측 27.6℃"를 st.metric의 delta로 넘겨 초록 상승 화살표로
     오해됐다(항상 초록 ▲로 보여 실제 방향과 무관하게 "좋아지고 있다"는 착시). delta를
     쓰지 않고 온도는 항상 "정상 · 내일 N℃" 칩으로, 습도는 임계 초과 시 "주의"/"경고" 칩으로
-    표현해 오독 여지를 없앤다."""
+    표현해 오독 여지를 없앤다.
+
+    (이슈 #48) 내부 온도·내부 습도·외부 온도는 `live`(_today_live_kpi() 결과)가 있으면
+    관제 오늘 운영(제어 후) 값을 쓰고, 없으면(KMA 미설정·실패 — 로컬/CI) 가상센서 원본
+    (vs.reading())으로 폴백한다. CO₂는 KMA에 없어 어느 경로든 가상센서 값을 그대로 쓴다."""
     try:
         r = vs.reading()
     except Exception:
         unavailable("핵심 지표", "가상 센서 조회 실패")
         return
 
+    if live is not None:
+        temp_val, hum_val, out_temp_val = live["ctrl_temp"], live["ctrl_hum"], live["out_temp"]
+    else:
+        temp_val, hum_val, out_temp_val = r["온도내부_평균"], r["습도내부_평균"], r["온도외부_평균"]
+
     temp_chip, temp_level = None, "ok"
     try:
         from dl import infer
-        live = vs.window()
-        fc = infer.forecast(live)
+        window = vs.window()
+        fc = infer.forecast(window)
         if fc:
-            temp_chip = f"정상 · 내일 {fc['next_temp']}℃ ({fc['trend']})"
+            if live is not None:
+                # 이슈 #48 — 제어 후 값 기준 밴드 재판정. setpoints.temp_low/high 안이면 정상.
+                sp = live["setpoints"]
+                temp_status = "정상" if sp.temp_low <= temp_val <= sp.temp_high else "주의"
+                temp_level = "ok" if temp_status == "정상" else "warn"
+            else:
+                temp_status = "정상"
+            temp_chip = f"{temp_status} · 내일 {fc['next_temp']}℃ ({fc['trend']})"
     except Exception:
         temp_chip = None
 
-    hum = r["습도내부_평균"]
+    hum = hum_val
     hum_warn, hum_crit = _HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK
     try:
         from llm import monitor as monitor_mod
@@ -116,12 +185,12 @@ def render_metric_cards(vs):
         hum_chip, hum_level = None, "ok"
 
     kpi_cards([
-        {"icon": "🌡", "label": "내부 온도", "value": f"{r['온도내부_평균']:.1f}", "unit": "℃",
+        {"icon": "🌡", "label": "내부 온도", "value": f"{temp_val:.1f}", "unit": "℃",
          "chip": temp_chip, "chip_level": temp_level},
         {"icon": "💧", "label": "내부 습도", "value": f"{hum:.0f}", "unit": "%",
          "chip": hum_chip, "chip_level": hum_level},
         {"icon": "🫧", "label": "CO₂", "value": f"{r['co2_평균']:.0f}", "unit": "ppm"},
-        {"icon": "🌤", "label": "외부 온도", "value": f"{r['온도외부_평균']:.1f}", "unit": "℃"},
+        {"icon": "🌤", "label": "외부 온도", "value": f"{out_temp_val:.1f}", "unit": "℃"},
     ])
 
 
@@ -244,8 +313,12 @@ def render():
     section("경보")
     render_alert_banner(vs)
 
-    section("핵심 지표", f"재생 작기 {year} · 최신 날짜 {vs.date()} · 데모(리플레이) 데이터")
-    render_metric_cards(vs)
+    live = _today_live_kpi()
+    if live is not None:
+        section("핵심 지표", f"오늘 {live['today']} · 관제 제어 후 값")
+    else:
+        section("핵심 지표", f"재생 작기 {year} · 최신 날짜 {vs.date()} · 데모(리플레이) 데이터")
+    render_metric_cards(vs, live)
 
     section("최근 7일 실측 vs 기대값")
     render_recent_chart(vs)
