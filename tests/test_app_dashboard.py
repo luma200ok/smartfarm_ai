@@ -337,6 +337,47 @@ def test_render_alert_banner_fallback_ok_when_no_alerts(monkeypatch):
     assert calls == [("ok", "현재 경보 없음 — 환경이 정상 범위예요.")]
 
 
+# ── render() — 이슈 #51 리뷰 P2-4: 타임라인 중복 계산 방지 ───────────────────
+def test_render_calls_today_live_timeline_only_once(monkeypatch):
+    """render() 1회 호출에 _today_live_timeline()(KMA baseline+simulate_control 조립,
+    비용이 드는 작업)이 정확히 1번만 실행돼야 하고, 경보 배너·핵심 지표가 같은 결과를
+    공유해야 한다(각자 내부에서 재조회하면 render() 1회에 2번 도는 회귀가 있었다)."""
+    dashboard_mod = _import_dashboard_module()
+    import streamlit as st
+
+    calls = []
+    timeline = [{"hour": 9, "ctrl_temp": 22.0, "ctrl_hum": 70.0, "out_temp": 18.0}]
+    setpoints = object()
+
+    def _fake_timeline():
+        calls.append(1)
+        return timeline, setpoints
+
+    banner_args = []
+    kpi_args = []
+
+    monkeypatch.setattr(dashboard_mod, "_today_live_timeline", _fake_timeline)
+    monkeypatch.setattr(dashboard_mod, "page_header", lambda *a, **k: None)
+    monkeypatch.setattr(dashboard_mod, "section", lambda *a, **k: None)
+    monkeypatch.setattr(dashboard_mod, "render_alert_banner",
+                         lambda vs, live_timeline=None: banner_args.append(live_timeline))
+    monkeypatch.setattr(dashboard_mod, "_today_live_kpi",
+                         lambda live_timeline=None: kpi_args.append(live_timeline) or None)
+    monkeypatch.setattr(dashboard_mod, "render_metric_cards", lambda vs, live=None: None)
+    monkeypatch.setattr(dashboard_mod, "render_recent_chart", lambda vs: None)
+    monkeypatch.setattr(dashboard_mod, "render_shortcuts", lambda: None)
+    fake_vs = _FakeVS({})
+    fake_vs.date = lambda: date.today()
+    monkeypatch.setattr(dashboard_mod, "_latest_vsensor", lambda: (fake_vs, 2024))
+    monkeypatch.setattr(st, "divider", lambda: None)
+
+    dashboard_mod.render()
+
+    assert len(calls) == 1
+    assert banner_args == [(timeline, setpoints)]
+    assert kpi_args == [(timeline, setpoints)]
+
+
 def test_render_metric_cards_unavailable_on_vsensor_reading_failure(monkeypatch):
     """vs.reading()이 예외를 던지면(가상 센서 조회 실패) unavailable 안내로 조용히 종료한다
     (이슈 #10 C4 — live 유무와 무관하게 항상 무크래시)."""

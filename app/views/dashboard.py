@@ -88,13 +88,18 @@ def _today_live_timeline():
         return None, None
 
 
-def _today_live_kpi():
+def _today_live_kpi(live_timeline=None):
     """관제 오늘 운영(제어 후) KPI — 현재 시각의 제어 후 내부 온·습도·외기(이슈 #48).
+
+    live_timeline — `_today_live_timeline()`의 (timeline, setpoints) 결과를 이미 조립해
+    뒀다면 그대로 넘겨 재사용한다(이슈 #51 리뷰 P2-4 — render()가 경보 배너·KPI 양쪽에
+    같은 타임라인을 공유해 assemble_today_timeline()이 render() 1회에 2번 도는 중복
+    계산을 없앤다). 생략(None)하면 기존처럼 직접 조회한다(단독 호출·테스트 무회귀).
 
     KMA 미설정·조회 실패·timeline 없음·필요 값 결측이면 None을 반환해 호출측이 가상센서
     원본으로 폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다)."""
     try:
-        timeline, setpoints = _today_live_timeline()
+        timeline, setpoints = live_timeline if live_timeline is not None else _today_live_timeline()
         if timeline is None:
             return None
         now_hour = datetime.now().hour
@@ -124,7 +129,7 @@ def _latest_vsensor():
     return vs, year
 
 
-def render_alert_banner(vs):
+def render_alert_banner(vs, live_timeline=None):
     """상단 경보 배너(이슈 #51) — 오늘 운영 "관제 제어 후" 값 기준으로 판정한다.
 
     핵심 지표(#48)는 이미 제어 후 값을 쓰는데 경보만 가상센서 원본(vs.reading())을 보면
@@ -134,13 +139,16 @@ def render_alert_banner(vs):
     밴드 안이면(=잘 제어되고 있으면) 경보가 자연히 사라진다. monitor.py 오늘운영 탭의
     "지금" 상태와 동일 기준(emergency_hours)이라 일관성이 유지된다.
 
+    live_timeline — `_today_live_kpi()`와 동일한 (timeline, setpoints) 공유 인자(이슈 #51
+    리뷰 P2-4, 중복 계산 방지). 생략하면 직접 조회한다.
+
     폴백 — KMA 실패로 타임라인이 없으면(제어 후 값 자체가 없음) 기존 vsensor 원본 기반
     monitor.assess() 경로를 그대로 쓴다(로컬/데모에서도 뭔가 보이게, 이슈 #10 C4 무크래시
     원칙과 동일)."""
     try:
         from control import live as live_mod
 
-        timeline, setpoints = _today_live_timeline()
+        timeline, setpoints = live_timeline if live_timeline is not None else _today_live_timeline()
         if timeline is not None:
             now_hour = datetime.now().hour
             emg = live_mod.emergency_hours(timeline, setpoints)
@@ -358,10 +366,15 @@ def render():
         render_shortcuts()
         return
 
-    section("경보")
-    render_alert_banner(vs)
+    # 이슈 #51 리뷰 P2-4 — 타임라인을 여기서 한 번만 조립해 경보 배너·핵심 지표 양쪽에
+    # 넘긴다(각자 내부에서 다시 조회하면 assemble_today_timeline()이 render() 1회에 2번
+    # 돈다). Setpoints/states가 unhashable이라 st.cache_data보다 이 방식이 더 간단하다.
+    live_timeline = _today_live_timeline()
 
-    live = _today_live_kpi()
+    section("경보")
+    render_alert_banner(vs, live_timeline)
+
+    live = _today_live_kpi(live_timeline)
     if live is not None:
         section("핵심 지표", f"오늘 {live['today']} · 관제 제어 후 값")
     else:

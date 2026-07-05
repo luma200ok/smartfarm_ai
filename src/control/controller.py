@@ -30,18 +30,29 @@ def _hum_band_state(value: float, low: float, high: float, deadband: float,
     밴드 경계가 아니라 **밴드 중앙(mid)** 으로 통일한다. 기존(#33 최초 버전)엔 ON 진입은
     밴드 밖 이탈 시(value>high/value<low)에만 걸려, 외란이 한쪽으로만 지속되면(예: 여름철
     고습) 값이 밴드 상단[mid+deadband, high] 안에만 갇혀 "중앙 위에서만 노는" 문제가 있었다
-    (습도 60~85 밴드에서 74.5~85%). 이를 중앙 기준 히스테리시스로 교체한다:
+    (기본값 습도 60~80 밴드에서 72.0~80.0%). 이를 중앙 기준 히스테리시스로 교체한다:
     - dev = value-mid. |dev|>deadband(진입 threshold)면 즉시 ON — 밴드 밖까지 갈 필요 없이
       중앙에서 deadband만큼만 벗어나도 장치가 반응해 항상 중앙 근처로 되돌리려 한다.
     - 지속 중(was_high/was_low)엔 |dev|>deadband*0.5(해제 threshold, 진입보다 좁음)까지
       ON을 유지하다 그 안쪽(중앙에 더 가까이 복귀)으로 들어와야 비로소 OFF — 진입보다
       좁은 해제 폭으로 채터링을 방지한다(표준 히스테리시스: 진입은 넓게, 해제는 중앙 쪽으로
       좁게).
-    안전 불변식 — 밴드가 충분히 넓으면(high-mid > deadband, 예: 습도 12.5>2.0, 온도 2.5>0.5)
-    value>high(또는 value<low)는 항상 |dev|>deadband를 만족해 하드 밴드 이탈 시 반드시
-    ON되는 기존 안전성이 그대로 보존된다."""
+
+    하드 경계 안전망(이슈 #51 리뷰 P2-2) — 슬라이더로 밴드를 아주 좁게 잡아
+    high-mid<=deadband가 되면, 위 중앙 기준 진입(dev>deadband)만으로는 value가 하드
+    상한(high)을 넘었는데도 "normal"(장치 미작동)이 나올 수 있다(예: low=69,high=71,
+    deadband=2.0 → mid=70, value=72는 dev=2.0으로 진입 threshold를 못 넘지만 72>71로
+    이미 하드 상한 초과). 그래서 `value>high`/`value<low` 하드 체크를 맨 앞에 둬 밴드
+    폭과 무관하게 항상 ON을 보장한다. 기본값처럼 밴드가 충분히 넓으면(high-mid>deadband)
+    이 두 줄은 절대 먼저 발동하지 않는다 — value>high면 dev=value-mid>high-mid>deadband라
+    바로 아래 중앙 기준 진입 조건이 어차피 먼저 참이 되므로, 결과·수렴 거동 모두 무회귀다.
+    좁은 밴드에서만 이 안전망이 실제로 의미를 갖는다."""
     mid = (low + high) / 2
     dev = value - mid
+    if value > high:  # 하드 상한 초과는 밴드 폭 무관 반드시 ON(안전망, 좁은 밴드 전용 발동)
+        return "high"
+    if value < low:
+        return "low"
     if dev > deadband:
         return "high"
     if dev < -deadband:
@@ -120,18 +131,37 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
         logs.append(ControlLog(date=str(date), device=device, action="ON" if want else "OFF",
                                 reason=reason, mode="auto"))
 
+    # 사유(reason) 문구는 모드 인지(이슈 #51 리뷰 P2-1) — center 모드는 ON 진입 기준이
+    # mid±deadband라, edge 모드용 하드 경계 문구("상한 초과"/"하한 미달")를 그대로 쓰면
+    # 실제 판정 근거와 다른 값(예: 74.0%인데 "80.0% 초과"라고 표시)이 monitor.py 디스코드
+    # 알림·이벤트 테이블에 노출된다. center는 중앙·목표 기준 문구로, edge는 기존 문구를
+    # 그대로 유지한다(하위호환·리플레이 무회귀).
+    temp_mid = (setpoints.temp_low + setpoints.temp_high) / 2
+    hum_mid = (setpoints.hum_low + setpoints.hum_high) / 2
+
+    def _off_reason(mode: str) -> str:
+        return "중앙 근접 복귀" if mode == "center" else "밴드 정상 범위 복귀"
+
+    def _temp_on_reason(is_high: bool) -> str:
+        if temp_mode == "center":
+            return f"온도 중앙 이탈({temp:.1f}℃ · 목표 {temp_mid:.1f}℃)"
+        return (f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃)" if is_high
+                else f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)")
+
+    def _hum_on_reason(is_high: bool) -> str:
+        if hum_mode == "center":
+            return f"습도 중앙 이탈({hum:.1f}% · 목표 {hum_mid:.1f}%)"
+        return (f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%)" if is_high
+                else f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)")
+
     _apply("cooling_fan", want_cooling,
-           f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃)" if want_cooling
-           else "밴드 정상 범위 복귀")
+           _temp_on_reason(True) if want_cooling else _off_reason(temp_mode))
     _apply("heater", want_heater,
-           f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)" if want_heater
-           else "밴드 정상 범위 복귀")
+           _temp_on_reason(False) if want_heater else _off_reason(temp_mode))
     _apply("dehumidifier", want_dehumidifier,
-           f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%)" if want_dehumidifier
-           else "밴드 정상 범위 복귀")
+           _hum_on_reason(True) if want_dehumidifier else _off_reason(hum_mode))
     _apply("humidifier", want_humidifier,
-           f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)" if want_humidifier
-           else "밴드 정상 범위 복귀")
+           _hum_on_reason(False) if want_humidifier else _off_reason(hum_mode))
 
     return logs
 
