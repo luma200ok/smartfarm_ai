@@ -197,7 +197,12 @@ def render_metric_cards(vs, live=None):
 
     (이슈 #48) 내부 온도·내부 습도·외부 온도는 `live`(_today_live_kpi() 결과)가 있으면
     관제 오늘 운영(제어 후) 값을 쓰고, 없으면(KMA 미설정·실패 — 로컬/CI) 가상센서 원본
-    (vs.reading())으로 폴백한다. CO₂는 KMA에 없어 어느 경로든 가상센서 값을 그대로 쓴다."""
+    (vs.reading())으로 폴백한다. CO₂는 KMA에 없어 어느 경로든 가상센서 값을 그대로 쓴다.
+
+    (이슈 #55) 습도 칩도 live(제어 후) 경로에선 온도 칩과 대칭으로 밴드(setpoints.hum_low/high)
+    기준으로 '주의'를 판정한다 — 경보 배너가 밴드 hum_high 기준(emergency_hours)으로 바뀌면서
+    카드 칩(병해 임계 85/90)과 80~85%에서 어긋나던 것을 밴드에 맞춰 일관화. 폴백(가상센서 원본)
+    경로는 제어 밴드가 없어 기존 병해 위험 임계(llm.monitor)를 그대로 쓴다."""
     try:
         r = vs.reading()
     except Exception:
@@ -227,18 +232,30 @@ def render_metric_cards(vs, live=None):
         temp_chip = None
 
     hum = hum_val
-    hum_warn, hum_crit = _HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK
-    try:
-        from llm import monitor as monitor_mod
-        hum_warn, hum_crit = monitor_mod.HUM_WARN, monitor_mod.HUM_CRIT
-    except Exception:
-        pass
-    if hum >= hum_crit:
-        hum_chip, hum_level = f"경고 · 상한 {hum_crit:.0f}% 초과", "danger"
-    elif hum >= hum_warn:
-        hum_chip, hum_level = f"주의 · 상한 {hum_warn:.0f}% 초과", "warn"
+    if live is not None:
+        # 이슈 #55 — 제어 후 값일 땐 습도 칩도 온도 칩(위 live 분기)과 대칭으로 밴드(setpoints)
+        # 기준 판정. 경보 배너가 밴드 hum_high(기본 80) 기준(emergency_hours)으로 바뀌면서,
+        # 카드 칩이 병해 임계(85/90)를 쓰면 80~85% 구간에서 배너=경고·카드=정상으로 어긋나던
+        # 것을 밴드에 맞춰 일관화한다(danger는 배너가 담당 — 칩은 온도와 동일하게 주의까지).
+        sp = live["setpoints"]
+        if hum > sp.hum_high or hum < sp.hum_low:
+            hum_chip, hum_level = f"주의 · 밴드({sp.hum_low:.0f}~{sp.hum_high:.0f}%) 벗어남", "warn"
+        else:
+            hum_chip, hum_level = None, "ok"
     else:
-        hum_chip, hum_level = None, "ok"
+        # 폴백(가상센서 원본·데모): 제어 밴드가 없으므로 병해 위험 임계(llm.monitor)로 표시.
+        hum_warn, hum_crit = _HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK
+        try:
+            from llm import monitor as monitor_mod
+            hum_warn, hum_crit = monitor_mod.HUM_WARN, monitor_mod.HUM_CRIT
+        except Exception:
+            pass
+        if hum >= hum_crit:
+            hum_chip, hum_level = f"경고 · 상한 {hum_crit:.0f}% 초과", "danger"
+        elif hum >= hum_warn:
+            hum_chip, hum_level = f"주의 · 상한 {hum_warn:.0f}% 초과", "warn"
+        else:
+            hum_chip, hum_level = None, "ok"
 
     kpi_cards([
         {"icon": "🌡", "label": "내부 온도", "value": f"{temp_val:.1f}", "unit": "℃",
