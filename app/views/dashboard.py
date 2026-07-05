@@ -3,6 +3,11 @@
 
 상단 경보 배너 + 핵심 지표 카드 4장 + 최근 7일 실측 vs 기대값 미니 차트 + 기능 바로가기 카드.
 모델·데이터가 없는 환경에서도 절대 죽지 않도록 모든 데이터 접근을 try/exists 가드로 감싼다(이슈 #10 C4).
+
+이슈 #47 — 야외 가독 미니멀 리디자인: metric_row(st.metric delta) 대신 kpi_cards(HTML 카드) +
+상태 칩으로 전환. 기존엔 "내일 예측 27.6℃"를 delta로 넘겨 초록 상승 화살표로 오해되던 문제를
+없애고, 예측/상태는 항상 칩으로 표현한다. 차트는 st.line_chart 대신 Altair로 y축을 데이터
+범위(±8% 여유)로 확대해 변화가 눈에 띄게 한다(monitor.py의 _live_trend_chart 패턴 참고).
 """
 from pathlib import Path
 import sys
@@ -14,7 +19,10 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from state import get_vsensor
-from ui import metric_row, page_header, section, unavailable
+from ui import alert_strip, kpi_cards, page_header, section, unavailable
+
+# 습도 KPI 칩 임계값 — llm.monitor.assess()의 경보 임계와 동일 소스(이슈 #47, 중복 정의 방지)
+_HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK = 85.0, 90.0
 
 
 def _latest_vsensor():
@@ -34,7 +42,9 @@ def _latest_vsensor():
 
 
 def render_alert_banner(vs):
-    """현재 커서 기준 monitor 평가 요약 — 모델·데이터 없으면 조용히 생략."""
+    """현재 커서 기준 monitor 평가 요약 — 모델·데이터 없으면 조용히 생략.
+
+    경보 레벨(한국어 "경고"/"주의")을 alert_strip의 'danger'/'warn'으로 매핑한다."""
     try:
         from llm import expect as expect_mod
         from llm import monitor as monitor_mod
@@ -50,38 +60,87 @@ def render_alert_banner(vs):
     except Exception:
         return
     if not alerts:
-        st.success("현재 경보 없음 — 환경이 정상 범위예요.")
+        alert_strip("ok", "현재 경보 없음 — 환경이 정상 범위예요.")
         return
+    level_map = {"경고": "danger", "주의": "warn"}
     for a in alerts:
         cause_txt = f" · 추정 원인: {a['cause']}" if a.get("cause") else ""
-        box = {"경고": st.error, "주의": st.warning}.get(a["level"], st.info)
-        box(f"[{a['level']}] {a['reason']}{cause_txt}")
+        alert_strip(level_map.get(a["level"], "warn"), f"{a['reason']}{cause_txt}",
+                     severity_label=a["level"])
 
 
 def render_metric_cards(vs):
-    """내부온도/습도/CO2/외기 metric 카드 4장 — 다음날 LSTM 예측 delta 포함."""
+    """내부온도/습도/CO2/외기 KPI 카드 4장 — 다음날 LSTM 예측·습도 상한은 상태 칩으로 표현.
+
+    (이슈 #47) 예전엔 "내일 예측 27.6℃"를 st.metric의 delta로 넘겨 초록 상승 화살표로
+    오해됐다(항상 초록 ▲로 보여 실제 방향과 무관하게 "좋아지고 있다"는 착시). delta를
+    쓰지 않고 온도는 항상 "정상 · 내일 N℃" 칩으로, 습도는 임계 초과 시 "주의"/"경고" 칩으로
+    표현해 오독 여지를 없앤다."""
     try:
         r = vs.reading()
     except Exception:
         unavailable("핵심 지표", "가상 센서 조회 실패")
         return
 
-    delta = None
+    temp_chip, temp_level = None, "ok"
     try:
         from dl import infer
         live = vs.window()
         fc = infer.forecast(live)
         if fc:
-            delta = f"내일 예측 {fc['next_temp']}℃ ({fc['trend']})"
+            temp_chip = f"정상 · 내일 {fc['next_temp']}℃ ({fc['trend']})"
     except Exception:
-        delta = None
+        temp_chip = None
 
-    metric_row([
-        ("내부 온도", f"{r['온도내부_평균']:.1f}℃", delta),
-        ("내부 습도", f"{r['습도내부_평균']:.0f}%", None),
-        ("CO₂", f"{r['co2_평균']:.0f}", None),
-        ("외부 온도", f"{r['온도외부_평균']:.1f}℃", None),
+    hum = r["습도내부_평균"]
+    hum_warn, hum_crit = _HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK
+    try:
+        from llm import monitor as monitor_mod
+        hum_warn, hum_crit = monitor_mod.HUM_WARN, monitor_mod.HUM_CRIT
+    except Exception:
+        pass
+    if hum >= hum_crit:
+        hum_chip, hum_level = f"경고 · 상한 {hum_crit:.0f}% 초과", "danger"
+    elif hum >= hum_warn:
+        hum_chip, hum_level = f"주의 · 상한 {hum_warn:.0f}% 초과", "warn"
+    else:
+        hum_chip, hum_level = None, "ok"
+
+    kpi_cards([
+        {"label": "🌡 내부 온도", "value": f"{r['온도내부_평균']:.1f}", "unit": "℃",
+         "chip": temp_chip, "chip_level": temp_level},
+        {"label": "💧 내부 습도", "value": f"{hum:.0f}", "unit": "%",
+         "chip": hum_chip, "chip_level": hum_level},
+        {"label": "🫧 CO₂", "value": f"{r['co2_평균']:.0f}", "unit": "ppm"},
+        {"label": "🌤 외부 온도", "value": f"{r['온도외부_평균']:.1f}", "unit": "℃"},
     ])
+
+
+def _recent_trend_chart(rows: list[dict]):
+    """최근 7일 실측 vs 기대값 Altair 차트(이슈 #47) — y축을 데이터 범위(min/max ±8% 여유)로
+    확대(0부터 시작 금지), 실측=실선+area fill, 기대값=점선. monitor.py의 _live_trend_chart
+    y축 확대 패턴을 참고했다."""
+    import altair as alt
+    import pandas as pd
+
+    df = pd.DataFrame(rows)
+    vals = pd.concat([df["실측"], df["기대값"]]).dropna()
+    lo, hi = float(vals.min()), float(vals.max())
+    pad = (hi - lo) * 0.08 or 1.0
+    y_scale = alt.Scale(domain=[lo - pad, hi + pad], zero=False, nice=False, clamp=True)
+
+    x_enc = alt.X("날짜:N", title=None, sort=None)
+    area = alt.Chart(df).mark_area(color="#3F7D23", opacity=0.12).encode(
+        x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale),
+    )
+    expect_line = alt.Chart(df).mark_line(
+        color="#3F7D23", strokeWidth=1.6, strokeDash=[5, 4], opacity=0.65, point=False,
+    ).encode(x=x_enc, y=alt.Y("기대값:Q", title=None, scale=y_scale))
+    actual_line = alt.Chart(df).mark_line(
+        color="#3F7D23", strokeWidth=2.4, point=True,
+    ).encode(x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale))
+
+    return (area + expect_line + actual_line).properties(height=220).configure_view(strokeWidth=0)
 
 
 def render_recent_chart(vs):
@@ -98,7 +157,6 @@ def render_recent_chart(vs):
         return
 
     try:
-        import pandas as pd
         live = vs.window()
         win_dates = vs.dates[vs.cursor - infer.WINDOW + 1: vs.cursor + 1]
         rows = []
@@ -110,7 +168,7 @@ def render_recent_chart(vs):
             if day_exp is not None:
                 rows.append({"날짜": d, "실측": actual, "기대값": day_exp["평균"]})
         if rows:
-            st.line_chart(pd.DataFrame(rows).set_index("날짜")[["실측", "기대값"]])
+            st.altair_chart(_recent_trend_chart(rows), use_container_width=True)
         else:
             unavailable("실측 vs 기대값 차트", "최근 구간 기대값 계산 실패")
     except Exception:
@@ -124,17 +182,21 @@ def render_shortcuts():
     매칭된다(파일 경로 문자열을 넘기면 StreamlitPageNotFoundError로 크래시 — 이슈 #10 P1-1).
     nav 모듈은 함수 내부에서 지연 임포트해 dashboard.py 모듈 로드 시점의 순환 참조를 피한다
     (app/nav.py가 이 모듈의 render를 임포트하므로).
+
+    (이슈 #47) 클릭 라우팅이 깨지면 안 되므로 st.page_link는 그대로 유지하고,
+    st.container(border=True, key="sf_shortcut_*")로 감싸 카드처럼 보이게만 CSS 스타일링한다
+    (완전 커스텀 HTML <a>로 대체하지 않음 — ui.py의 .sf-shortcut CSS 참조).
     """
     import nav
 
     c1, c2, c3 = st.columns(3)
-    with c1:
+    with c1, st.container(border=True, key="sf_shortcut_1"):
         st.page_link(nav.PAGE_DIAGNOSIS, label="🔬 잎 병해 진단", icon="🔬")
         st.caption("잎 사진을 업로드해 병해를 진단해요.")
-    with c2:
+    with c2, st.container(border=True, key="sf_shortcut_2"):
         st.page_link(nav.PAGE_PRESCRIBE, label="💊 AI 처방", icon="💊")
         st.caption("진단 결과로 자연어 처방을 받아요.")
-    with c3:
+    with c3, st.container(border=True, key="sf_shortcut_3"):
         st.page_link(nav.PAGE_MONITOR, label="🌡️ 환경 관제", icon="🌡️")
         st.caption("가상 센서를 재생하며 설정 밴드 기반 자동제어·경보를 확인해요.")
 
@@ -152,7 +214,7 @@ def render():
     section("경보")
     render_alert_banner(vs)
 
-    section("핵심 지표", f"재생 작기 {year} · 최신 날짜 {vs.date()}")
+    section("핵심 지표", f"재생 작기 {year} · 최신 날짜 {vs.date()} · 데모(리플레이) 데이터")
     render_metric_cards(vs)
 
     section("최근 7일 실측 vs 기대값")
