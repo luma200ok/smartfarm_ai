@@ -221,7 +221,6 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
     (events = 그 시간대에 발생한 ControlLog 목록).
     """
     from control import controller
-    from control.effects import EFFECTS_HOURLY
 
     date = date or datetime.now().date()
 
@@ -295,7 +294,7 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
             # 관통 방지는 P-제어 도입(이슈 #45)으로 델타 자체가 temp_mid를 향해 비례
             # 수렴해 밴드 중앙을 크게 넘기지 않지만, 외기 급변(base_drift_temp)이 한
             # 스텝에 더해질 수 있어 중앙(temp_mid) 기준 데드밴드 경계는 안전망으로
-            # 유지한다(습도와 대칭 — 296~299행 참조).
+            # 유지한다(아래 습도 블록과 대칭).
             temp_mid = (setpoints.temp_low + setpoints.temp_high) / 2
             if "cooling_fan" in devices_on:   # 냉방 중 — 중앙 데드밴드 아래로 관통 금지
                 candidate = max(candidate, temp_mid - setpoints.temp_deadband)
