@@ -26,18 +26,29 @@ def _band_state(value: float, low: float, high: float, deadband: float,
 
 def _hum_band_state(value: float, low: float, high: float, deadband: float,
                      was_high: bool, was_low: bool) -> str:
-    """습도 전용 밴드 판정(이슈 #33) — ON은 온도와 동일하게 밴드 밖 이탈 시지만, OFF는
-    밴드 경계가 아니라 **밴드 중앙(mid) 근접 시**다(P-제어 목표가 중앙이므로 OFF 기준도
-    중앙에 맞춘다). 지속(was_high/was_low) 중에는 |value-mid|가 deadband를 넘어야(=
-    아직 중앙에서 충분히 먼) "high"/"low" 유지, deadband 이내로 들어오면 "normal"(OFF)."""
+    """중앙 유지형(center-hold) 밴드 판정(이슈 #33, 재설계 #51) — ON/OFF 판정 기준을
+    밴드 경계가 아니라 **밴드 중앙(mid)** 으로 통일한다. 기존(#33 최초 버전)엔 ON 진입은
+    밴드 밖 이탈 시(value>high/value<low)에만 걸려, 외란이 한쪽으로만 지속되면(예: 여름철
+    고습) 값이 밴드 상단[mid+deadband, high] 안에만 갇혀 "중앙 위에서만 노는" 문제가 있었다
+    (습도 60~85 밴드에서 74.5~85%). 이를 중앙 기준 히스테리시스로 교체한다:
+    - dev = value-mid. |dev|>deadband(진입 threshold)면 즉시 ON — 밴드 밖까지 갈 필요 없이
+      중앙에서 deadband만큼만 벗어나도 장치가 반응해 항상 중앙 근처로 되돌리려 한다.
+    - 지속 중(was_high/was_low)엔 |dev|>deadband*0.5(해제 threshold, 진입보다 좁음)까지
+      ON을 유지하다 그 안쪽(중앙에 더 가까이 복귀)으로 들어와야 비로소 OFF — 진입보다
+      좁은 해제 폭으로 채터링을 방지한다(표준 히스테리시스: 진입은 넓게, 해제는 중앙 쪽으로
+      좁게).
+    안전 불변식 — 밴드가 충분히 넓으면(high-mid > deadband, 예: 습도 12.5>2.0, 온도 2.5>0.5)
+    value>high(또는 value<low)는 항상 |dev|>deadband를 만족해 하드 밴드 이탈 시 반드시
+    ON되는 기존 안전성이 그대로 보존된다."""
     mid = (low + high) / 2
-    if value > high:
+    dev = value - mid
+    if dev > deadband:
         return "high"
-    if value < low:
+    if dev < -deadband:
         return "low"
-    if was_high and abs(value - mid) > deadband:
+    if was_high and dev > deadband * 0.5:
         return "high"
-    if was_low and abs(value - mid) > deadband:
+    if was_low and dev < -deadband * 0.5:
         return "low"
     return "normal"
 
@@ -55,17 +66,19 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
       (시뮬레이션 탭, app/views/monitor.py._run_control_step)는 EFFECTS_DAILY(1일 고정
       ±5%p) 스텝이라, 중앙(mid) OFF 창을 큰 스텝으로 건너뛰면 반대쪽 밴드까지 관통하는
       회귀가 있어 반드시 이 모드를 써야 한다.
-    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state). live(오늘 운영,
-      control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해 비례 수렴)라
-      이 모드를 명시적으로 사용한다.
+    - "center"(중앙 유지형, 이슈 #51 재설계) — ON/OFF 판정 기준을 밴드 경계가 아니라
+      중앙(mid)으로 통일(_hum_band_state). 밴드 밖까지 갈 필요 없이 중앙에서 deadband만큼만
+      벗어나도 ON(진입), 지속 중엔 deadband*0.5 안쪽(더 중앙 근접)까지 들어와야 OFF(해제).
+      live(오늘 운영, control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해
+      비례 수렴)와 짝을 이뤄 이 모드를 명시적으로 사용한다.
 
     temp_mode(이슈 #45, hum_mode와 대칭) — 온도 판정 방식 선택:
     - "edge"(기본, 하위호환) — 경계 히스테리시스(_band_state). 리플레이(시뮬레이션 탭,
       app/views/monitor.py._run_control_step)는 이 기본값을 그대로 사용(변경 없음).
-    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state 재사용 — 이름은 습도지만
-      로직이 low/high/mid 기준 범용이라 온도에도 그대로 쓴다. 회귀 최소화를 위해
-      리네임하지 않음). live(control.live.simulate_control)는 온도 P-제어(이슈 #45)
-      도입으로 이 모드를 명시적으로 사용한다.
+    - "center"(중앙 유지형, 이슈 #51) — _hum_band_state 재사용(이름은 습도지만 로직이
+      low/high/mid 기준 범용이라 온도에도 그대로 쓴다. 회귀 최소화를 위해 리네임하지
+      않음). live(control.live.simulate_control)는 온도 P-제어(이슈 #45) 도입으로 이
+      모드를 명시적으로 사용한다.
     """
     temp = reading.get("온도내부_평균", (setpoints.temp_low + setpoints.temp_high) / 2)
     hum = reading.get("습도내부_평균", (setpoints.hum_low + setpoints.hum_high) / 2)

@@ -18,6 +18,11 @@ assemble_today_timeline()으로 오늘 제어 후 내부 온·습도·외기를 
 KMA 키 미설정(로컬/CI)·조회 실패·timeline 없음이면 조용히 가상센서 원본 경로로 폴백한다
 (이슈 #10 C4 — 대시보드는 어떤 경우도 크래시하지 않아야 함). CO₂는 KMA에 없으므로
 가상센서(vs.reading()) 값을 그대로 쓴다(사용자 확정).
+
+이슈 #51 — 상단 경보 배너도 같은 "관제 제어 후" 값 기준으로 전환. 제어후 값이 밴드 안이면
+(=잘 제어되고 있으면) 경보가 자연히 사라지도록 control.live.emergency_hours()(장치
+풀가동에도 밴드 밖=제어 한계 초과)로 판정한다. KMA 실패 폴백은 기존 vsensor 원본 기반
+monitor.assess() 경로를 그대로 유지.
 """
 from datetime import date as _date
 from datetime import datetime
@@ -52,16 +57,17 @@ def _cached_today_outdoor():
     return live_mod.today_outdoor()
 
 
-def _today_live_kpi():
-    """관제 오늘 운영(제어 후) KPI — monitor.py의 render_live_tab()과 동일 방식으로 오늘
-    타임라인을 조립해 현재 시각의 제어 후 내부 온·습도·외기를 계산한다(이슈 #48).
+def _today_live_timeline():
+    """관제 오늘 운영 타임라인(list[dict])+setpoints 전체 — monitor.py의 render_live_tab()과
+    동일 방식(assemble_today_timeline)으로 조립한다(이슈 #48, #51).
 
     대시보드는 세션별 수동 조작(장치 카드 토글)을 반영할 필요가 없으므로 시뮬 상태는 항상
     default_states()(전체 자동)로 고정한다 — render_live_tab()과 달리 세션 K_LIVE_DEVICE_STATES는
     쓰지 않는다.
 
-    KMA 미설정·조회 실패·timeline 없음·필요 값 결측이면 None을 반환해 호출측이 가상센서
-    원본으로 폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다)."""
+    KMA 미설정·조회 실패·timeline 없음이면 (None, None)을 반환해 호출측이 가상센서 원본으로
+    폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다). _today_live_kpi()
+    (핵심 지표)·render_alert_banner()(경보, 이슈 #51)가 공통으로 재사용한다."""
     try:
         from control import live as live_mod
         from control.actuators import default_states
@@ -69,20 +75,35 @@ def _today_live_kpi():
 
         outdoor = _cached_today_outdoor()
         if outdoor is None:
-            return None
+            return None, None
         today = _date.today()
         now_hour = datetime.now().hour
         setpoints = load_setpoints()
         timeline = live_mod.assemble_today_timeline(
             outdoor, setpoints, default_states(), today, now_hour)
         if not timeline:
+            return None, None
+        return timeline, setpoints
+    except Exception:
+        return None, None
+
+
+def _today_live_kpi():
+    """관제 오늘 운영(제어 후) KPI — 현재 시각의 제어 후 내부 온·습도·외기(이슈 #48).
+
+    KMA 미설정·조회 실패·timeline 없음·필요 값 결측이면 None을 반환해 호출측이 가상센서
+    원본으로 폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다)."""
+    try:
+        timeline, setpoints = _today_live_timeline()
+        if timeline is None:
             return None
+        now_hour = datetime.now().hour
         cur = next((t for t in timeline if t["hour"] == now_hour), timeline[-1])
         ctrl_temp, ctrl_hum, out_temp = cur.get("ctrl_temp"), cur.get("ctrl_hum"), cur.get("out_temp")
         if ctrl_temp is None or ctrl_hum is None or out_temp is None:
             return None
         return {"ctrl_temp": ctrl_temp, "ctrl_hum": ctrl_hum, "out_temp": out_temp,
-                "today": today, "setpoints": setpoints}
+                "today": _date.today(), "setpoints": setpoints}
     except Exception:
         return None
 
@@ -104,9 +125,36 @@ def _latest_vsensor():
 
 
 def render_alert_banner(vs):
-    """현재 커서 기준 monitor 평가 요약 — 모델·데이터 없으면 조용히 생략.
+    """상단 경보 배너(이슈 #51) — 오늘 운영 "관제 제어 후" 값 기준으로 판정한다.
 
-    경보 레벨(한국어 "경고"/"주의")을 alert_strip의 'danger'/'warn'으로 매핑한다."""
+    핵심 지표(#48)는 이미 제어 후 값을 쓰는데 경보만 가상센서 원본(vs.reading())을 보면
+    "고습 93% 경고" 같은 불일치가 생긴다(실제로는 제어가 잘 돼 밴드 안인데 원본 센서는
+    여전히 밴드 밖). control.live.emergency_hours()로 현재 시각이 "장치 풀가동에도 밴드
+    밖"(제어 한계 초과)인지만 보고, 그 경우에만 "경고"(danger)로 표시한다 — 제어 후 값이
+    밴드 안이면(=잘 제어되고 있으면) 경보가 자연히 사라진다. monitor.py 오늘운영 탭의
+    "지금" 상태와 동일 기준(emergency_hours)이라 일관성이 유지된다.
+
+    폴백 — KMA 실패로 타임라인이 없으면(제어 후 값 자체가 없음) 기존 vsensor 원본 기반
+    monitor.assess() 경로를 그대로 쓴다(로컬/데모에서도 뭔가 보이게, 이슈 #10 C4 무크래시
+    원칙과 동일)."""
+    try:
+        from control import live as live_mod
+
+        timeline, setpoints = _today_live_timeline()
+        if timeline is not None:
+            now_hour = datetime.now().hour
+            emg = live_mod.emergency_hours(timeline, setpoints)
+            cur_emg = [e for e in emg if e["hour"] == now_hour]
+            if cur_emg:
+                for item in cur_emg:
+                    alert_strip("danger", item["reason"], severity_label="경고")
+            else:
+                alert_strip("ok", "현재 경보 없음 — 환경이 정상 범위예요.")
+            return
+    except Exception:
+        pass
+
+    # 폴백(KMA 실패 — 타임라인 없음): 기존 vsensor 원본 기반 assess() 경로.
     try:
         from llm import expect as expect_mod
         from llm import monitor as monitor_mod

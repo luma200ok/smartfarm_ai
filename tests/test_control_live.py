@@ -296,6 +296,74 @@ def test_simulate_control_temp_converges_symmetric_heater():
     assert abs(last["ctrl_temp"] - temp_mid) <= _sp().temp_deadband + 1e-6
 
 
+# ── 중앙 유지형 재설계(이슈 #51) — 계절형 외란 지속 시나리오 ────────────────
+# 재설계 전엔 외란이 한쪽으로 지속되면(예: 여름철 고습·고온) ctrl 값이 밴드 상단
+# (구 기본값 60~85% 기준 74.5~85%)에만 갇혀 "중앙 위에서만 놀았다". 겨울철은 대칭으로
+# 하한 정체. 아래는 이 문제가 해소돼 실제로 중앙 부근에 수렴함을 모델 없이(합성 baseline)
+# 직접 검증한다.
+def test_simulate_control_summer_disturbance_converges_near_mid_not_stuck_at_band_top():
+    """여름형 — 외기 유입으로 base_temp·base_hum이 지속적으로 밴드 상단을 넘는 고온다습
+    (27.5℃·92%)이 계속돼도, 냉방·제습 효과로 ctrl 값이 밴드 상단에 갇히지 않고 중앙
+    부근(계절 특성상 중앙보다 약간 위)으로 수렴해야 한다."""
+    baseline = _baseline({h: (27.5, 92.0) for h in range(48)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    sp = _sp()
+    temp_mid = (sp.temp_low + sp.temp_high) / 2
+    hum_mid = (sp.hum_low + sp.hum_high) / 2
+    last = timeline[-1]
+
+    # 중앙 근접 수렴 — 데드밴드 폭 이내(구버전이라면 밴드 상단에 갇혀 훨씬 크게 벗어남).
+    assert abs(last["ctrl_temp"] - temp_mid) <= sp.temp_deadband + 1e-6
+    assert abs(last["ctrl_hum"] - hum_mid) <= sp.hum_deadband + 1e-6
+    # 계절 lean 방향 — 외란이 고온다습 쪽이므로 중앙보다 살짝 위에서 수렴.
+    assert last["ctrl_temp"] >= temp_mid
+    assert last["ctrl_hum"] >= hum_mid
+    # 옛 정체 구간(밴드 상단, 예: 습도 74.5~85%)에 갇히지 않음 — 중앙과의 거리가
+    # 밴드 반폭(high-mid)의 절반보다 훨씬 작아야 한다.
+    assert abs(last["ctrl_hum"] - hum_mid) < (sp.hum_high - hum_mid) / 2
+    assert abs(last["ctrl_temp"] - temp_mid) < (sp.temp_high - temp_mid) / 2
+
+    # 채터링 없음 — 장치 상태가 수렴 후 매 시간 토글되지 않음.
+    temp_on = ["cooling_fan" in t["devices_on"] for t in timeline]
+    hum_on = ["dehumidifier" in t["devices_on"] for t in timeline]
+    temp_transitions = sum(1 for i in range(1, len(temp_on)) if temp_on[i] != temp_on[i - 1])
+    hum_transitions = sum(1 for i in range(1, len(hum_on)) if hum_on[i] != hum_on[i - 1])
+    assert temp_transitions <= 2
+    assert hum_transitions <= 2
+
+
+def test_simulate_control_winter_disturbance_converges_near_mid_not_stuck_at_band_bottom():
+    """겨울형 — base_temp·base_hum이 지속적으로 낮은 저온저습(15.0℃·40%)이 계속돼도,
+    난방·가습 효과로 ctrl 값이 밴드 하단에 갇히지 않고 중앙 부근(계절 특성상 중앙보다
+    약간 아래)으로 수렴해야 한다(여름형과 대칭)."""
+    baseline = _baseline({h: (15.0, 40.0) for h in range(48)})
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    sp = _sp()
+    temp_mid = (sp.temp_low + sp.temp_high) / 2
+    hum_mid = (sp.hum_low + sp.hum_high) / 2
+    last = timeline[-1]
+
+    assert abs(last["ctrl_temp"] - temp_mid) <= sp.temp_deadband + 1e-6
+    assert abs(last["ctrl_hum"] - hum_mid) <= sp.hum_deadband + 1e-6
+    # 계절 lean 방향 — 외란이 저온저습 쪽이므로 중앙보다 살짝 아래에서 수렴.
+    assert last["ctrl_temp"] <= temp_mid
+    assert last["ctrl_hum"] <= hum_mid
+    # 옛 정체 구간(밴드 하단)에 갇히지 않음.
+    assert abs(last["ctrl_hum"] - hum_mid) < (hum_mid - sp.hum_low) / 2
+    assert abs(last["ctrl_temp"] - temp_mid) < (temp_mid - sp.temp_low) / 2
+
+    temp_on = ["heater" in t["devices_on"] for t in timeline]
+    hum_on = ["humidifier" in t["devices_on"] for t in timeline]
+    temp_transitions = sum(1 for i in range(1, len(temp_on)) if temp_on[i] != temp_on[i - 1])
+    hum_transitions = sum(1 for i in range(1, len(hum_on)) if hum_on[i] != hum_on[i - 1])
+    assert temp_transitions <= 2
+    assert hum_transitions <= 2
+
+
 def test_dehumidifier_and_humidifier_never_both_on_live():
     from control import controller
     states = default_states()
@@ -332,10 +400,15 @@ def test_state_file_vent_key_backward_compat(monkeypatch, _isolated_state, _isol
 
 
 def test_simulate_control_no_chattering_with_variable_baseline():
-    """리뷰 P2-1 픽스 검증 — 가변 외기(밴드 경계 부근에서 ±1~1.5℃ 흔들림)에서도 제어
-    관성(누적) 방식 + 히스테리시스로 장치 ON/OFF 전환 횟수가 임계(3회) 이하여야 한다."""
-    base = 25.3  # 밴드 상한(25.0) 바로 위 — 경계 부근
-    swing = [1.5, -1.2, 1.3, -1.0, 1.4, -1.1, 1.2, -1.3, 1.1, -1.4]
+    """리뷰 P2-1 픽스 검증 — 가변 외기(진입 문턱 부근에서 흔들림)에서도 제어 관성(누적)
+    방식 + 히스테리시스로 장치 ON/OFF 전환 횟수가 임계(3회) 이하여야 한다.
+
+    이슈 #51(중앙 유지형 재설계)로 ON 진입 문턱이 밴드 경계(25.0℃)에서 중앙+데드밴드
+    (22.5+0.5=23.0℃)로 훨씬 좁아졌다 — 그만큼 흔들림 진폭도 문턱 부근 스케일(과거
+    ±1~1.5℃ → 새 진입/해제 간격(0.25℃) 대비)로 줄여야 동일한 회귀 의도(작은 노이즈에
+    채터링 없음)를 유지할 수 있다."""
+    base = 23.3  # 진입 문턱(23.0) 바로 위 — 경계 부근
+    swing = [0.15, -0.12, 0.13, -0.10, 0.14, -0.11, 0.12, -0.13, 0.11, -0.14]
     hours_temp = {}
     v = base
     for h, s in enumerate(swing):
@@ -400,7 +473,10 @@ def test_simulate_control_without_deepcopy_drifts_across_calls():
     # 수렴해버려 fan이 자연히 OFF된다. 시종일관 ON 상태를 유지시키려면 충분히 높은 기준선(45℃)
     # 이 필요하다(6시간 동안 2℃/h씩 내려가도 35℃로 여전히 밴드 상한 초과).
     hot_baseline = _baseline({h: (45.0, 70.0) for h in range(6)})   # 밴드 상한 초과 지속 — fan ON 유발
-    normal_baseline = _baseline({h: (24.7, 70.0) for h in range(3)})  # 데드밴드(24.5) 안쪽, 밴드 자체는 정상
+    # 이슈 #51(중앙 유지형 재설계) — 진입 문턱(23.0℃)과 해제 문턱(22.75℃) 사이(22.9℃)를
+    # 사용한다: 신규(fresh) 상태에선 진입 문턱 미달로 OFF, 오염(was_high=True) 상태에선
+    # 해제 문턱을 넘겨 ON을 유지 — 아래 두 타임라인의 첫 시간 판정이 갈리는 지점.
+    normal_baseline = _baseline({h: (22.9, 70.0) for h in range(3)})
 
     states_fresh = default_states()
     fresh_timeline = live.simulate_control(normal_baseline, _sp(), states_fresh, date="2026-07-03")

@@ -7,7 +7,7 @@ _today_live_kpi()는 monitor.py의 render_live_tab()과 동일 방식(assemble_t
 """
 import importlib
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -233,6 +233,108 @@ def test_render_metric_cards_humidity_chip_danger_on_live_path(monkeypatch):
     hum_item = captured["items"][1]
     assert hum_item["value"] == "92"
     assert hum_item["chip_level"] == "danger"
+
+
+# ── render_alert_banner (이슈 #51 — 관제 제어 후 값 기준 경보) ──────────────
+def test_render_alert_banner_no_alert_when_timeline_within_band(monkeypatch):
+    """제어 후 값이 밴드 안(제어 한계 초과 아님)이면 emergency_hours가 빈 목록을 반환해
+    "현재 경보 없음"만 떠야 한다 — 잘 제어되고 있으면 경보가 자연히 사라진다."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+
+    now_hour = 9
+    timeline = [{"hour": now_hour, "ctrl_temp": 22.0, "ctrl_hum": 70.0, "devices_on": []}]
+    setpoints = object()
+    monkeypatch.setattr(dashboard_mod, "_today_live_timeline", lambda: (timeline, setpoints))
+    monkeypatch.setattr(live_mod, "emergency_hours", lambda tl, sp: [])
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 5, now_hour, 30)
+
+    monkeypatch.setattr(dashboard_mod, "datetime", _FixedDatetime)
+
+    calls = []
+    monkeypatch.setattr(dashboard_mod, "alert_strip",
+                         lambda level, text, severity_label=None: calls.append((level, text)))
+
+    dashboard_mod.render_alert_banner(vs=None)
+    assert calls == [("ok", "현재 경보 없음 — 환경이 정상 범위예요.")]
+
+
+def test_render_alert_banner_danger_when_current_hour_is_emergency(monkeypatch):
+    """제어 한계 초과(장치 풀가동에도 밴드 밖) 시각이 현재 시각과 일치하면 danger로 표시."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+
+    now_hour = 14
+    timeline = [{"hour": now_hour, "ctrl_temp": 30.0, "ctrl_hum": 70.0,
+                 "devices_on": ["cooling_fan"]}]
+    setpoints = object()
+    monkeypatch.setattr(dashboard_mod, "_today_live_timeline", lambda: (timeline, setpoints))
+    emg_reason = "제어 한계 초과 — 냉방 풀가동에도 고온 지속(30.0℃)"
+    monkeypatch.setattr(live_mod, "emergency_hours",
+                         lambda tl, sp: [{"hour": now_hour, "kind": "temp_high", "reason": emg_reason}])
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 5, now_hour, 0)
+
+    monkeypatch.setattr(dashboard_mod, "datetime", _FixedDatetime)
+
+    calls = []
+    monkeypatch.setattr(dashboard_mod, "alert_strip",
+                         lambda level, text, severity_label=None: calls.append((level, text, severity_label)))
+
+    dashboard_mod.render_alert_banner(vs=None)
+    assert calls == [("danger", emg_reason, "경고")]
+
+
+def test_render_alert_banner_falls_back_to_vsensor_assess_when_no_timeline(monkeypatch):
+    """KMA 실패로 타임라인이 없으면(제어 후 값 없음) 기존 vsensor 원본 기반 assess() 경로로
+    폴백한다(회귀 방지 — 로컬/데모에서도 경보 배너가 동작해야 함)."""
+    dashboard_mod = _import_dashboard_module()
+    from llm import expect as expect_mod
+    from llm import monitor as monitor_mod
+
+    monkeypatch.setattr(dashboard_mod, "_today_live_timeline", lambda: (None, None))
+    monkeypatch.setattr(expect_mod, "load_model", lambda force=False: {"dummy": True})
+    monkeypatch.setattr(expect_mod, "predict", lambda model, r, d: {"평균": 20.0})
+    monkeypatch.setattr(
+        monitor_mod, "assess",
+        lambda r, exp: [{"level": "경고", "reason": "고습 93% 지속", "cause": None}])
+
+    calls = []
+    monkeypatch.setattr(dashboard_mod, "alert_strip",
+                         lambda level, text, severity_label=None: calls.append((level, text)))
+
+    vs = _FakeVS({"온도내부_평균": 22.0, "습도내부_평균": 93.0})
+    vs.date = lambda: date.today()
+    dashboard_mod.render_alert_banner(vs)
+    assert calls == [("danger", "고습 93% 지속")]
+
+
+def test_render_alert_banner_fallback_ok_when_no_alerts(monkeypatch):
+    """폴백 경로에서도 경보가 없으면 기존과 동일하게 '현재 경보 없음'을 띄운다."""
+    dashboard_mod = _import_dashboard_module()
+    from llm import expect as expect_mod
+    from llm import monitor as monitor_mod
+
+    monkeypatch.setattr(dashboard_mod, "_today_live_timeline", lambda: (None, None))
+    monkeypatch.setattr(expect_mod, "load_model", lambda force=False: {"dummy": True})
+    monkeypatch.setattr(expect_mod, "predict", lambda model, r, d: {"평균": 20.0})
+    monkeypatch.setattr(monitor_mod, "assess", lambda r, exp: [])
+
+    calls = []
+    monkeypatch.setattr(dashboard_mod, "alert_strip",
+                         lambda level, text, severity_label=None: calls.append((level, text)))
+
+    vs = _FakeVS({"온도내부_평균": 22.0, "습도내부_평균": 70.0})
+    vs.date = lambda: date.today()
+    dashboard_mod.render_alert_banner(vs)
+    assert calls == [("ok", "현재 경보 없음 — 환경이 정상 범위예요.")]
 
 
 def test_render_metric_cards_unavailable_on_vsensor_reading_failure(monkeypatch):
