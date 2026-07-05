@@ -8,6 +8,9 @@
 상태 칩으로 전환. 기존엔 "내일 예측 27.6℃"를 delta로 넘겨 초록 상승 화살표로 오해되던 문제를
 없애고, 예측/상태는 항상 칩으로 표현한다. 차트는 st.line_chart 대신 Altair로 y축을 데이터
 범위(±8% 여유)로 확대해 변화가 눈에 띄게 한다(monitor.py의 _live_trend_chart 패턴 참고).
+
+딥그린 다크 기본/라이트 토글 확장(이슈 #47 2차) — 차트 색은 ui.current_theme()에 따라
+다크(밝은 그린 #5FD08A·짙은 배경 그리드)/라이트(진한 그린 #3F7D23·옅은 그리드)로 갈아 낀다.
 """
 from pathlib import Path
 import sys
@@ -19,10 +22,16 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from state import get_vsensor
-from ui import alert_strip, kpi_cards, page_header, section, unavailable
+from ui import alert_strip, current_theme, kpi_cards, page_header, section, unavailable
 
 # 습도 KPI 칩 임계값 — llm.monitor.assess()의 경보 임계와 동일 소스(이슈 #47, 중복 정의 방지)
 _HUM_WARN_FALLBACK, _HUM_CRIT_FALLBACK = 85.0, 90.0
+
+# 최근 7일 차트 팔레트(이슈 #47 2차) — ui.py의 _DARK/_LIGHT KPI 팔레트와 톤을 맞춤
+_CHART_PALETTE = {
+    "dark": {"accent": "#5FD08A", "bg": "#0F1C15", "grid": "#1C2C22", "axis_text": "#6F8577"},
+    "light": {"accent": "#3F7D23", "bg": "#FFFFFF", "grid": "#EEF1EA", "axis_text": "#9AA891"},
+}
 
 
 def _latest_vsensor():
@@ -107,21 +116,24 @@ def render_metric_cards(vs):
         hum_chip, hum_level = None, "ok"
 
     kpi_cards([
-        {"label": "🌡 내부 온도", "value": f"{r['온도내부_평균']:.1f}", "unit": "℃",
+        {"icon": "🌡", "label": "내부 온도", "value": f"{r['온도내부_평균']:.1f}", "unit": "℃",
          "chip": temp_chip, "chip_level": temp_level},
-        {"label": "💧 내부 습도", "value": f"{hum:.0f}", "unit": "%",
+        {"icon": "💧", "label": "내부 습도", "value": f"{hum:.0f}", "unit": "%",
          "chip": hum_chip, "chip_level": hum_level},
-        {"label": "🫧 CO₂", "value": f"{r['co2_평균']:.0f}", "unit": "ppm"},
-        {"label": "🌤 외부 온도", "value": f"{r['온도외부_평균']:.1f}", "unit": "℃"},
+        {"icon": "🫧", "label": "CO₂", "value": f"{r['co2_평균']:.0f}", "unit": "ppm"},
+        {"icon": "🌤", "label": "외부 온도", "value": f"{r['온도외부_평균']:.1f}", "unit": "℃"},
     ])
 
 
 def _recent_trend_chart(rows: list[dict]):
     """최근 7일 실측 vs 기대값 Altair 차트(이슈 #47) — y축을 데이터 범위(min/max ±8% 여유)로
-    확대(0부터 시작 금지), 실측=실선+area fill, 기대값=점선. monitor.py의 _live_trend_chart
-    y축 확대 패턴을 참고했다."""
+    확대(0부터 시작 금지), 실측=실선+area fill(끝점만 테두리 마커), 기대값=점선. monitor.py의
+    _live_trend_chart y축 확대 패턴을 참고했다. 옅은 가로 그리드 + 색은 현재 테마(다크/라이트)에
+    맞춰 갈아 낀다(ui.current_theme())."""
     import altair as alt
     import pandas as pd
+
+    pal = _CHART_PALETTE.get(current_theme(), _CHART_PALETTE["dark"])
 
     df = pd.DataFrame(rows)
     vals = pd.concat([df["실측"], df["기대값"]]).dropna()
@@ -130,17 +142,32 @@ def _recent_trend_chart(rows: list[dict]):
     y_scale = alt.Scale(domain=[lo - pad, hi + pad], zero=False, nice=False, clamp=True)
 
     x_enc = alt.X("날짜:N", title=None, sort=None)
-    area = alt.Chart(df).mark_area(color="#3F7D23", opacity=0.12).encode(
+    area = alt.Chart(df).mark_area(color=pal["accent"], opacity=0.22).encode(
         x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale),
     )
     expect_line = alt.Chart(df).mark_line(
-        color="#3F7D23", strokeWidth=1.6, strokeDash=[5, 4], opacity=0.65, point=False,
+        color=pal["accent"], strokeWidth=1.6, strokeDash=[5, 4], opacity=0.65, point=False,
     ).encode(x=x_enc, y=alt.Y("기대값:Q", title=None, scale=y_scale))
     actual_line = alt.Chart(df).mark_line(
-        color="#3F7D23", strokeWidth=2.4, point=True,
+        color=pal["accent"], strokeWidth=2.4, point=False,
+    ).encode(x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale))
+    end_point = alt.Chart(df.iloc[[-1]]).mark_circle(
+        size=90, color=pal["accent"], stroke=pal["bg"], strokeWidth=2,
     ).encode(x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale))
 
-    return (area + expect_line + actual_line).properties(height=220).configure_view(strokeWidth=0)
+    # 이슈 #47 2차 — Streamlit은 config.toml의 base(다크 고정)를 따라 Vega 차트에도 자체 다크
+    # 테마를 입혀서, 라이트 토글 시에도 차트 배경만 그대로 어둡게 남는 버그가 있었다. 차트
+    # 배경(configure background)을 현재 팔레트로 명시해 항상 앱 배경과 일치시킨다.
+    return (area + expect_line + actual_line + end_point).properties(height=220).configure(
+        background=pal["bg"]
+    ).configure_view(
+        strokeWidth=0, fill=pal["bg"],
+    ).configure_axisY(
+        gridColor=pal["grid"], gridOpacity=1, domain=False, ticks=False,
+        labelColor=pal["axis_text"], labelFontSize=9, tickCount=4,
+    ).configure_axisX(
+        domain=False, ticks=False, labelColor=pal["axis_text"], labelFontSize=10,
+    )
 
 
 def render_recent_chart(vs):
@@ -185,24 +212,27 @@ def render_shortcuts():
 
     (이슈 #47) 클릭 라우팅이 깨지면 안 되므로 st.page_link는 그대로 유지하고,
     st.container(border=True, key="sf_shortcut_*")로 감싸 카드처럼 보이게만 CSS 스타일링한다
-    (완전 커스텀 HTML <a>로 대체하지 않음 — ui.py의 .sf-shortcut CSS 참조).
-    """
+    (완전 커스텀 HTML <a>로 대체하지 않음 — ui.py의 .sf-shortcut-icon/div[class*=st-key-sf_shortcut]
+    CSS 참조). 아이콘은 그린 그라데이션 원(장식용 HTML)을 page_link 위에 별도로 얹는다."""
     import nav
 
     c1, c2, c3 = st.columns(3)
     with c1, st.container(border=True, key="sf_shortcut_1"):
-        st.page_link(nav.PAGE_DIAGNOSIS, label="🔬 잎 병해 진단", icon="🔬")
+        st.markdown('<div class="sf-shortcut-icon">🔬</div>', unsafe_allow_html=True)
+        st.page_link(nav.PAGE_DIAGNOSIS, label="잎 병해 진단")
         st.caption("잎 사진을 업로드해 병해를 진단해요.")
     with c2, st.container(border=True, key="sf_shortcut_2"):
-        st.page_link(nav.PAGE_PRESCRIBE, label="💊 AI 처방", icon="💊")
+        st.markdown('<div class="sf-shortcut-icon">💊</div>', unsafe_allow_html=True)
+        st.page_link(nav.PAGE_PRESCRIBE, label="AI 처방")
         st.caption("진단 결과로 자연어 처방을 받아요.")
     with c3, st.container(border=True, key="sf_shortcut_3"):
-        st.page_link(nav.PAGE_MONITOR, label="🌡️ 환경 관제", icon="🌡️")
+        st.markdown('<div class="sf-shortcut-icon">🌡️</div>', unsafe_allow_html=True)
+        st.page_link(nav.PAGE_MONITOR, label="환경 관제")
         st.caption("가상 센서를 재생하며 설정 밴드 기반 자동제어·경보를 확인해요.")
 
 
 def render():
-    page_header("🏠 농장 대시보드", "오늘의 환경 상태와 경보를 한눈에 확인하세요.")
+    page_header("🏠 농장 대시보드", "오늘의 환경 상태와 경보를 한눈에 확인하세요.", badge="데모")
 
     vs, year = _latest_vsensor()
     if vs is None:

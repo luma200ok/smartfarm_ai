@@ -22,9 +22,12 @@ sys.path.insert(0, str(_APP_DIR / "views"))
 
 st.set_page_config(page_title="SmartFarm AI", page_icon="🌱", layout="wide")
 
-from ui import inject_css   # noqa: E402
+from ui import inject_css, render_theme_toggle   # noqa: E402
 import nav                  # noqa: E402
 
+# 이슈 #47 — 딥그린 다크 기본 + 라이트 토글. session_state["sf_theme"]를 먼저 정한 뒤(사이드바
+# 상단에 토글 렌더) inject_css()가 같은 rerun에서 그 값을 읽어 팔레트를 주입해야 한다(순서 중요).
+render_theme_toggle()
 inject_css()
 
 st.navigation(nav.NAV_GROUPS).run()
