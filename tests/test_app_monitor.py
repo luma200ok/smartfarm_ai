@@ -232,6 +232,49 @@ def test_split_control_segments_color_domain_range_length_matches():
     assert set(out_df["구분"].unique()) == {"외기", "제어 전(기준선)", "제어 후(실행)", "제어 후(계획)"}
 
 
+# ── _live_trend_chart 배경/축 테마 반영(이슈 #48 P2 — 라이트 토글 시 차트 배경만 다크로
+# 남던 버그) ────────────────────────────────────────────────────────────────
+def _trend_rows(n=5):
+    return [{"hour": h, "외부 온도": 20.0 + h} for h in range(n)]
+
+
+def test_live_trend_chart_background_matches_dark_theme(monkeypatch):
+    monitor_mod = _import_monitor_module()
+    monkeypatch.setattr(monitor_mod, "current_theme", lambda: "dark")  # 세션 상태 불필요
+    chart = monitor_mod._live_trend_chart(_trend_rows(), ["외부 온도"], low=18, high=22, now_hour=2)
+    cfg = chart.to_dict()["config"]
+    dark = monitor_mod._TREND_BG_PALETTE["dark"]
+    assert cfg["background"] == dark["bg"]
+    assert cfg["view"]["fill"] == dark["bg"]
+    assert cfg["axisX"]["gridColor"] == dark["grid"]
+    assert cfg["axisY"]["gridColor"] == dark["grid"]
+    assert cfg["legend"]["labelColor"] == dark["axis_text"]
+
+
+def test_live_trend_chart_background_matches_light_theme(monkeypatch):
+    """라이트 토글 시 차트 배경이 다크로 남는 회귀를 직접 잡는 테스트(이슈 #48)."""
+    monitor_mod = _import_monitor_module()
+    monkeypatch.setattr(monitor_mod, "current_theme", lambda: "light")
+    chart = monitor_mod._live_trend_chart(_trend_rows(), ["외부 온도"], low=18, high=22, now_hour=2)
+    cfg = chart.to_dict()["config"]
+    light = monitor_mod._TREND_BG_PALETTE["light"]
+    assert cfg["background"] == "#FFFFFF" == light["bg"]
+    assert cfg["view"]["fill"] == "#FFFFFF"
+    assert cfg["axisX"]["gridColor"] == light["grid"]
+    assert cfg["axisY"]["gridColor"] == light["grid"]
+    # 이슈 #48 부수 발견 — 범례도 캔버스 렌더링이라 축과 동일하게 명시하지 않으면 라이트에서
+    # 거의 안 보였다(Streamlit 기본 다크 textColor 잔존).
+    assert cfg["legend"]["labelColor"] == light["axis_text"]
+
+
+def test_live_trend_chart_defaults_to_dark_when_theme_unrecognized(monkeypatch):
+    monitor_mod = _import_monitor_module()
+    monkeypatch.setattr(monitor_mod, "current_theme", lambda: "unknown")
+    chart = monitor_mod._live_trend_chart(_trend_rows(), ["외부 온도"], low=18, high=22, now_hour=1)
+    cfg = chart.to_dict()["config"]
+    assert cfg["background"] == monitor_mod._TREND_BG_PALETTE["dark"]["bg"]
+
+
 def test_split_control_segments_no_split_col_returns_unchanged():
     """split_col=None이면 long_df·domain·range가 원본 그대로(변경 없음)."""
     monitor_mod = _import_monitor_module()
