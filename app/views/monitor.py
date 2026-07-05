@@ -445,9 +445,22 @@ def _live_trend_chart(rows: list, value_cols: list, low: float, high: float, now
     long_df["_굵기"] = long_df["구분"].apply(lambda v: 1.5 if "(제어 없음)" in v else 3.0)
     long_df["_불투명"] = long_df["구분"].apply(lambda v: 0.55 if "(제어 없음)" in v else 1.0)
 
-    lines = alt.Chart(long_df).mark_line(point=True).encode(
+    # y축 기본 범위는 밴드 구간 ±20% — 밴드에서 멀리 떨어진 구간(예: 온도 0~20℃,
+    # 습도 0~60%)은 잘라내고 밴드 주변만 확대해 보여준다. 단, 실제 데이터가 이
+    # 범위를 벗어나면(예: 한겨울 외기) 그쪽으로만 유동적으로 넓혀 라인이 잘리지
+    # 않게 한다.
+    pad = (high - low) * 0.20 or 1.0
+    y_lo, y_hi = low - pad, high + pad
+    vals = long_df["값"].dropna()
+    if not vals.empty:
+        data_pad = pad * 0.25
+        y_lo = min(y_lo, float(vals.min()) - data_pad)
+        y_hi = max(y_hi, float(vals.max()) + data_pad)
+    y_scale = alt.Scale(domain=[y_lo, y_hi], zero=False, nice=False, clamp=True)
+
+    lines = alt.Chart(long_df).mark_line(point=True, clip=True).encode(
         x=alt.X("hour:Q", title="시간(시)", scale=alt.Scale(domain=[0, max_hour])),
-        y=alt.Y("값:Q", title=None),
+        y=alt.Y("값:Q", title=None, scale=y_scale),
         color=alt.Color("구분:N", title=None, scale=alt.Scale(domain=color_domain, range=color_range)),
         strokeDash=alt.StrokeDash("_선:N", legend=None,
                                    scale=alt.Scale(domain=["실행", "계획"], range=[[1, 0], [5, 3]])),
