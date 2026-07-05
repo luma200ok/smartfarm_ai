@@ -38,6 +38,11 @@ INDOOR_HUMIDITY_OFFSET = 10.0
 HUM_P_GAIN = 0.6
 HUM_P_MAX_DELTA = 8.0
 
+# 온도 P-제어(이슈 #45) — 습도와 대칭. 냉방/히터 ON 중 시간당 델타 =
+# clamp(TEMP_P_GAIN × (temp_mid - ctrl_temp), ±TEMP_P_MAX_DELTA). temp_mid=밴드 중앙.
+TEMP_P_GAIN = 0.6
+TEMP_P_MAX_DELTA = 2.0   # 기존 EFFECTS_HOURLY 냉난방 ±2.0℃/h와 동일 상한(한 스텝 급변 방지)
+
 # 일사량 시간별 데이터가 없어 주간(07~18시)만 "낮"으로 근사(학습 데이터 doy 계절 평균 사용),
 # 야간은 0으로 둔다.
 DAYTIME_HOURS = range(7, 19)
@@ -150,6 +155,17 @@ def _hum_pcontrol_delta(devices_on: "list[str]", ctrl_hum: float, setpoints) -> 
     return max(-HUM_P_MAX_DELTA, min(HUM_P_MAX_DELTA, raw))
 
 
+def _temp_pcontrol_delta(devices_on: "list[str]", ctrl_temp: float, setpoints) -> float:
+    """온도 P-제어 델타(이슈 #45) — 냉방/히터 ON 중에만 temp_mid를 향해 비례 이동.
+    둘 다 OFF면 0.0. decide()가 cooling_fan/heater 동시 ON을 금지하므로 두 장치가
+    동시에 들어올 일은 없다."""
+    if "cooling_fan" not in devices_on and "heater" not in devices_on:
+        return 0.0
+    temp_mid = (setpoints.temp_low + setpoints.temp_high) / 2
+    raw = TEMP_P_GAIN * (temp_mid - ctrl_temp)
+    return max(-TEMP_P_MAX_DELTA, min(TEMP_P_MAX_DELTA, raw))
+
+
 def _clamp_into_band(value, low: float, high: float, deadband: float):
     """밴드 안쪽(low+deadband ~ high-deadband)으로 클램프 — 자정 연속성 폴백(이슈 #35)에서
     "이전에도 제어 운영 중이었다" 가정으로 0시 시작값을 밴드 밖 기준선 대신 안쪽에서
@@ -205,7 +221,6 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
     (events = 그 시간대에 발생한 ControlLog 목록).
     """
     from control import controller
-    from control.effects import EFFECTS_HOURLY
 
     date = date or datetime.now().date()
 
@@ -247,11 +262,12 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
                 ctrl_hum = item["base_hum"]
 
         reading = {"온도내부_평균": ctrl_temp, "습도내부_평균": ctrl_hum}
-        # hum_mode="center" — P-제어(델타가 hum_mid로 비례 수렴)에 맞춰 OFF 판정도 중앙
-        # 근접 기준을 명시(리뷰 P1 픽스, 이슈 #33) — 리플레이(app/views/monitor.py)는
-        # decide() 기본값(edge, 경계 히스테리시스)을 그대로 사용.
+        # hum_mode/temp_mode="center" — P-제어(델타가 mid로 비례 수렴)에 맞춰 OFF 판정도
+        # 중앙 근접 기준을 명시(습도=리뷰 P1 픽스 이슈 #33, 온도=이슈 #45로 대칭 확장) —
+        # 리플레이(app/views/monitor.py)는 decide() 기본값(edge, 경계 히스테리시스)을
+        # 그대로 사용.
         logs = controller.decide(reading, setpoints, states, date=f"{date} {item['hour']:02d}:00",
-                                  hum_mode="center")
+                                  hum_mode="center", temp_mode="center")
         devices_on = [d for d in states if states[d].on]
 
         timeline.append({
@@ -261,7 +277,7 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
             "devices_on": devices_on, "events": logs,
         })
 
-        delta_temp = sum(EFFECTS_HOURLY.get(d, {}).get("온도내부_평균", 0.0) for d in devices_on)
+        delta_temp = _temp_pcontrol_delta(devices_on, ctrl_temp, setpoints)
         delta_hum = _hum_pcontrol_delta(devices_on, ctrl_hum, setpoints)
 
         next_base_temp = baseline[idx + 1]["base_temp"] if idx + 1 < len(baseline) else None
@@ -275,10 +291,15 @@ def simulate_control(baseline: "list[dict]", setpoints, states, date=None,
             # 물리 클램프가 관통 방지 경계보다 더 좁게 잡히는 극단적 케이스에서도 "냉방/난방
             # 중엔 반대쪽 데드밴드를 넘지 않는다"는 안전 불변식이 깨지지 않도록 한다.
             candidate = max(next_base_temp - CTRL_TEMP_BAND, min(next_base_temp + CTRL_TEMP_BAND, candidate))
-            if "cooling_fan" in devices_on:  # 냉방 중 — temp_low 데드밴드 경계 아래로 관통 금지
-                candidate = max(candidate, setpoints.temp_low + setpoints.temp_deadband)
-            if "heater" in devices_on:  # 난방 중 — temp_high 데드밴드 경계 위로 관통 금지
-                candidate = min(candidate, setpoints.temp_high - setpoints.temp_deadband)
+            # 관통 방지는 P-제어 도입(이슈 #45)으로 델타 자체가 temp_mid를 향해 비례
+            # 수렴해 밴드 중앙을 크게 넘기지 않지만, 외기 급변(base_drift_temp)이 한
+            # 스텝에 더해질 수 있어 중앙(temp_mid) 기준 데드밴드 경계는 안전망으로
+            # 유지한다(아래 습도 블록과 대칭).
+            temp_mid = (setpoints.temp_low + setpoints.temp_high) / 2
+            if "cooling_fan" in devices_on:   # 냉방 중 — 중앙 데드밴드 아래로 관통 금지
+                candidate = max(candidate, temp_mid - setpoints.temp_deadband)
+            if "heater" in devices_on:        # 난방 중 — 중앙 데드밴드 위로 관통 금지
+                candidate = min(candidate, temp_mid + setpoints.temp_deadband)
             ctrl_temp = candidate
         else:
             ctrl_temp = None

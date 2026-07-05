@@ -239,6 +239,63 @@ def test_simulate_control_emergency_hum_still_detected_with_pcontrol():
     assert all("고습 지속" in e["reason"] for e in emg)
 
 
+# ── 온도 P-제어(이슈 #45, 습도와 대칭) ─────────────────────────────────────
+def test_temp_pcontrol_delta_negative_when_cooling_above_mid():
+    """냉방 ON + ctrl_temp가 중앙보다 높으면 델타는 음수(중앙으로 끌어내림)."""
+    delta = live._temp_pcontrol_delta(["cooling_fan"], 24.0, _sp())
+    assert delta < 0.0
+
+
+def test_temp_pcontrol_delta_positive_when_heater_below_mid():
+    """히터 ON + ctrl_temp가 중앙보다 낮으면 델타는 양수(중앙으로 끌어올림)."""
+    delta = live._temp_pcontrol_delta(["heater"], 21.0, _sp())
+    assert delta > 0.0
+
+
+def test_temp_pcontrol_delta_zero_when_both_devices_off():
+    """냉방·히터 둘 다 OFF면 장치 효과가 없으므로 델타 0.0."""
+    assert live._temp_pcontrol_delta([], 30.0, _sp()) == 0.0
+    assert live._temp_pcontrol_delta([], -10.0, _sp()) == 0.0
+
+
+def test_temp_pcontrol_delta_capped_at_max():
+    """오차가 클 때(캡 도달 수준) 델타가 TEMP_P_MAX_DELTA를 넘지 않는다(양방향)."""
+    delta_cool = live._temp_pcontrol_delta(["cooling_fan"], 99.0, _sp())
+    assert delta_cool == pytest.approx(-live.TEMP_P_MAX_DELTA)
+    delta_heat = live._temp_pcontrol_delta(["heater"], -99.0, _sp())
+    assert delta_heat == pytest.approx(live.TEMP_P_MAX_DELTA)
+
+
+def test_simulate_control_temp_converges_to_mid_no_chattering():
+    """고온 시작 → 냉방 ON → ctrl_temp가 밴드 중앙(22.5℃) 부근으로 수렴하고 진동 없음."""
+    baseline = _baseline({h: (30.0, 70.0) for h in range(30)})  # 외기 온도 고정(안정적 수렴 확인)
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    on_flags = ["cooling_fan" in t["devices_on"] for t in timeline]
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 2  # ON → (수렴 후) OFF, 그 이상 왔다갔다 없음(진동 방지)
+
+    last = timeline[-1]
+    temp_mid = (_sp().temp_low + _sp().temp_high) / 2
+    assert abs(last["ctrl_temp"] - temp_mid) <= _sp().temp_deadband + 1e-6
+
+
+def test_simulate_control_temp_converges_symmetric_heater():
+    """저온 대칭 — 히터 ON → ctrl_temp가 중앙(22.5℃)으로 수렴."""
+    baseline = _baseline({h: (15.0, 70.0) for h in range(30)})  # 저온 고정
+    states = default_states()
+    timeline = live.simulate_control(baseline, _sp(), states, date="2026-07-03")
+
+    on_flags = ["heater" in t["devices_on"] for t in timeline]
+    transitions = sum(1 for i in range(1, len(on_flags)) if on_flags[i] != on_flags[i - 1])
+    assert transitions <= 2
+
+    last = timeline[-1]
+    temp_mid = (_sp().temp_low + _sp().temp_high) / 2
+    assert abs(last["ctrl_temp"] - temp_mid) <= _sp().temp_deadband + 1e-6
+
+
 def test_dehumidifier_and_humidifier_never_both_on_live():
     from control import controller
     states = default_states()

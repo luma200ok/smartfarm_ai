@@ -128,6 +128,55 @@ def test_hum_edge_mode_is_default_and_matches_temp_hysteresis():
     assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs2)
 
 
+# ── 온도 밴드 중앙 목표 OFF 판정(이슈 #45, 습도와 대칭) ───────────────────
+def test_temp_cooling_stays_on_until_mid_reached():
+    """temp_mode="center"(live 경로 전용, 이슈 #45) — 냉방 ON 후 밴드 안(25℃ 아래)이어도
+    중앙(22.5℃)에서 데드밴드(0.5) 밖이면 유지."""
+    states = default_states()
+    decide(_reading(temp=26.0), _sp(), states, date="d1", temp_mode="center")
+    assert states["cooling_fan"].on is True
+    logs = decide(_reading(temp=24.0), _sp(), states, date="d2", temp_mode="center")  # 밴드 안, 중앙과 거리 1.5 > 0.5
+    assert states["cooling_fan"].on is True
+    assert logs == []
+
+
+def test_temp_cooling_turns_off_near_mid():
+    """temp_mode="center" — 중앙(22.5℃) 데드밴드(0.5) 이내로 들어오면 OFF."""
+    states = default_states()
+    decide(_reading(temp=26.0), _sp(), states, date="d1", temp_mode="center")
+    assert states["cooling_fan"].on is True
+    logs = decide(_reading(temp=23.0), _sp(), states, date="d2", temp_mode="center")  # |23-22.5|=0.5 <= 0.5
+    assert states["cooling_fan"].on is False
+    assert any(log.device == "cooling_fan" and log.action == "OFF" for log in logs)
+
+
+def test_temp_heater_turns_off_near_mid_symmetric():
+    """temp_mode="center" — 히터도 동일. 중앙 근접 시 OFF(저온 대칭)."""
+    states = default_states()
+    decide(_reading(temp=19.0), _sp(), states, date="d1", temp_mode="center")
+    assert states["heater"].on is True
+    logs = decide(_reading(temp=22.0), _sp(), states, date="d2", temp_mode="center")  # |22-22.5|=0.5 <= 0.5
+    assert states["heater"].on is False
+    assert any(log.device == "heater" and log.action == "OFF" for log in logs)
+
+
+def test_temp_edge_mode_is_default_and_matches_hum_hysteresis():
+    """temp_mode 기본값(edge)은 습도와 동일한 경계 히스테리시스(_band_state)를 쓴다 —
+    리플레이(app/views/monitor.py._run_control_step)는 이 기본값을 그대로 사용해야 하므로
+    회귀 방지용으로 명시 검증(이슈 #45, hum 기본값 검증과 대칭)."""
+    states = default_states()
+    decide(_reading(temp=26.0), _sp(), states, date="d1")  # temp_mode 미지정
+    assert states["cooling_fan"].on is True
+    # 밴드 안(25℃ 아래)이라도 경계 히스테리시스 창(high-deadband=24.5) 안쪽까지 와야 OFF —
+    # 중앙(22.5℃)까지 갈 필요 없음(edge≠center 확인).
+    logs = decide(_reading(temp=24.6), _sp(), states, date="d2")  # 24.5보다 큼 → 유지
+    assert states["cooling_fan"].on is True
+    assert logs == []
+    logs2 = decide(_reading(temp=24.4), _sp(), states, date="d3")  # 24.5보다 작음 → OFF
+    assert states["cooling_fan"].on is False
+    assert any(log.device == "cooling_fan" and log.action == "OFF" for log in logs2)
+
+
 # ── 리플레이(edge 모드) + EFFECTS_DAILY 고정 스텝 회귀(이슈 #33 리뷰 P1 픽스) ────────
 def test_replay_edge_mode_humidifier_no_overshoot_with_daily_step():
     """리뷰어 재현 시나리오 — 초기 55%(밴드 60~85% 하한 미달)에서 decide(hum_mode="edge",
