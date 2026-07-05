@@ -19,6 +19,7 @@ from crops import render as _crops
 from about import render as _about
 from ml_eval import render as _ml_eval
 from dl_eval import render as _dl_eval
+from llm_eval import render as _llm_eval
 
 PAGE_DASHBOARD = st.Page(_dashboard, title="농장 대시보드", icon="🏠", url_path="home", default=True)
 PAGE_DIAGNOSIS = st.Page(_diagnosis, title="잎 병해 진단", icon="🔬", url_path="diagnosis")
@@ -28,8 +29,9 @@ PAGE_CROPS = st.Page(_crops, title="작물 환경 추천", icon="🌾", url_path
 PAGE_ABOUT = st.Page(_about, title="프로젝트 개요·성과", icon="📈", url_path="about")
 PAGE_ML_EVAL = st.Page(_ml_eval, title="ML 실험 기록", icon="📊", url_path="ml-eval")
 PAGE_DL_EVAL = st.Page(_dl_eval, title="DL 실험 기록", icon="📊", url_path="dl-eval")
+PAGE_LLM_EVAL = st.Page(_llm_eval, title="LLM 실험 기록", icon="📊", url_path="llm-eval")
 
 NAV_GROUPS = {
     "서비스": [PAGE_DASHBOARD, PAGE_DIAGNOSIS, PAGE_PRESCRIBE, PAGE_MONITOR, PAGE_CROPS],
-    "프로젝트 기록": [PAGE_ABOUT, PAGE_ML_EVAL, PAGE_DL_EVAL],
+    "프로젝트 기록": [PAGE_ABOUT, PAGE_ML_EVAL, PAGE_DL_EVAL, PAGE_LLM_EVAL],
 }
