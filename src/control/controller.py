@@ -26,18 +26,40 @@ def _band_state(value: float, low: float, high: float, deadband: float,
 
 def _hum_band_state(value: float, low: float, high: float, deadband: float,
                      was_high: bool, was_low: bool) -> str:
-    """습도 전용 밴드 판정(이슈 #33) — ON은 온도와 동일하게 밴드 밖 이탈 시지만, OFF는
-    밴드 경계가 아니라 **밴드 중앙(mid) 근접 시**다(P-제어 목표가 중앙이므로 OFF 기준도
-    중앙에 맞춘다). 지속(was_high/was_low) 중에는 |value-mid|가 deadband를 넘어야(=
-    아직 중앙에서 충분히 먼) "high"/"low" 유지, deadband 이내로 들어오면 "normal"(OFF)."""
+    """중앙 유지형(center-hold) 밴드 판정(이슈 #33, 재설계 #51) — ON/OFF 판정 기준을
+    밴드 경계가 아니라 **밴드 중앙(mid)** 으로 통일한다. 기존(#33 최초 버전)엔 ON 진입은
+    밴드 밖 이탈 시(value>high/value<low)에만 걸려, 외란이 한쪽으로만 지속되면(예: 여름철
+    고습) 값이 밴드 상단[mid+deadband, high] 안에만 갇혀 "중앙 위에서만 노는" 문제가 있었다
+    (기본값 습도 60~80 밴드에서 72.0~80.0%). 이를 중앙 기준 히스테리시스로 교체한다:
+    - dev = value-mid. |dev|>deadband(진입 threshold)면 즉시 ON — 밴드 밖까지 갈 필요 없이
+      중앙에서 deadband만큼만 벗어나도 장치가 반응해 항상 중앙 근처로 되돌리려 한다.
+    - 지속 중(was_high/was_low)엔 |dev|>deadband*0.5(해제 threshold, 진입보다 좁음)까지
+      ON을 유지하다 그 안쪽(중앙에 더 가까이 복귀)으로 들어와야 비로소 OFF — 진입보다
+      좁은 해제 폭으로 채터링을 방지한다(표준 히스테리시스: 진입은 넓게, 해제는 중앙 쪽으로
+      좁게).
+
+    하드 경계 안전망(이슈 #51 리뷰 P2-2) — 슬라이더로 밴드를 아주 좁게 잡아
+    high-mid<=deadband가 되면, 위 중앙 기준 진입(dev>deadband)만으로는 value가 하드
+    상한(high)을 넘었는데도 "normal"(장치 미작동)이 나올 수 있다(예: low=69,high=71,
+    deadband=2.0 → mid=70, value=72는 dev=2.0으로 진입 threshold를 못 넘지만 72>71로
+    이미 하드 상한 초과). 그래서 `value>high`/`value<low` 하드 체크를 맨 앞에 둬 밴드
+    폭과 무관하게 항상 ON을 보장한다. 기본값처럼 밴드가 충분히 넓으면(high-mid>deadband)
+    이 두 줄은 절대 먼저 발동하지 않는다 — value>high면 dev=value-mid>high-mid>deadband라
+    바로 아래 중앙 기준 진입 조건이 어차피 먼저 참이 되므로, 결과·수렴 거동 모두 무회귀다.
+    좁은 밴드에서만 이 안전망이 실제로 의미를 갖는다."""
     mid = (low + high) / 2
-    if value > high:
+    dev = value - mid
+    if value > high:  # 하드 상한 초과는 밴드 폭 무관 반드시 ON(안전망, 좁은 밴드 전용 발동)
         return "high"
     if value < low:
         return "low"
-    if was_high and abs(value - mid) > deadband:
+    if dev > deadband:
         return "high"
-    if was_low and abs(value - mid) > deadband:
+    if dev < -deadband:
+        return "low"
+    if was_high and dev > deadband * 0.5:
+        return "high"
+    if was_low and dev < -deadband * 0.5:
         return "low"
     return "normal"
 
@@ -55,17 +77,19 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
       (시뮬레이션 탭, app/views/monitor.py._run_control_step)는 EFFECTS_DAILY(1일 고정
       ±5%p) 스텝이라, 중앙(mid) OFF 창을 큰 스텝으로 건너뛰면 반대쪽 밴드까지 관통하는
       회귀가 있어 반드시 이 모드를 써야 한다.
-    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state). live(오늘 운영,
-      control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해 비례 수렴)라
-      이 모드를 명시적으로 사용한다.
+    - "center"(중앙 유지형, 이슈 #51 재설계) — ON/OFF 판정 기준을 밴드 경계가 아니라
+      중앙(mid)으로 통일(_hum_band_state). 밴드 밖까지 갈 필요 없이 중앙에서 deadband만큼만
+      벗어나도 ON(진입), 지속 중엔 deadband*0.5 안쪽(더 중앙 근접)까지 들어와야 OFF(해제).
+      live(오늘 운영, control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해
+      비례 수렴)와 짝을 이뤄 이 모드를 명시적으로 사용한다.
 
     temp_mode(이슈 #45, hum_mode와 대칭) — 온도 판정 방식 선택:
     - "edge"(기본, 하위호환) — 경계 히스테리시스(_band_state). 리플레이(시뮬레이션 탭,
       app/views/monitor.py._run_control_step)는 이 기본값을 그대로 사용(변경 없음).
-    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state 재사용 — 이름은 습도지만
-      로직이 low/high/mid 기준 범용이라 온도에도 그대로 쓴다. 회귀 최소화를 위해
-      리네임하지 않음). live(control.live.simulate_control)는 온도 P-제어(이슈 #45)
-      도입으로 이 모드를 명시적으로 사용한다.
+    - "center"(중앙 유지형, 이슈 #51) — _hum_band_state 재사용(이름은 습도지만 로직이
+      low/high/mid 기준 범용이라 온도에도 그대로 쓴다. 회귀 최소화를 위해 리네임하지
+      않음). live(control.live.simulate_control)는 온도 P-제어(이슈 #45) 도입으로 이
+      모드를 명시적으로 사용한다.
     """
     temp = reading.get("온도내부_평균", (setpoints.temp_low + setpoints.temp_high) / 2)
     hum = reading.get("습도내부_평균", (setpoints.hum_low + setpoints.hum_high) / 2)
@@ -107,18 +131,37 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
         logs.append(ControlLog(date=str(date), device=device, action="ON" if want else "OFF",
                                 reason=reason, mode="auto"))
 
+    # 사유(reason) 문구는 모드 인지(이슈 #51 리뷰 P2-1) — center 모드는 ON 진입 기준이
+    # mid±deadband라, edge 모드용 하드 경계 문구("상한 초과"/"하한 미달")를 그대로 쓰면
+    # 실제 판정 근거와 다른 값(예: 74.0%인데 "80.0% 초과"라고 표시)이 monitor.py 디스코드
+    # 알림·이벤트 테이블에 노출된다. center는 중앙·목표 기준 문구로, edge는 기존 문구를
+    # 그대로 유지한다(하위호환·리플레이 무회귀).
+    temp_mid = (setpoints.temp_low + setpoints.temp_high) / 2
+    hum_mid = (setpoints.hum_low + setpoints.hum_high) / 2
+
+    def _off_reason(mode: str) -> str:
+        return "중앙 근접 복귀" if mode == "center" else "밴드 정상 범위 복귀"
+
+    def _temp_on_reason(is_high: bool) -> str:
+        if temp_mode == "center":
+            return f"온도 중앙 이탈({temp:.1f}℃ · 목표 {temp_mid:.1f}℃)"
+        return (f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃)" if is_high
+                else f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)")
+
+    def _hum_on_reason(is_high: bool) -> str:
+        if hum_mode == "center":
+            return f"습도 중앙 이탈({hum:.1f}% · 목표 {hum_mid:.1f}%)"
+        return (f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%)" if is_high
+                else f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)")
+
     _apply("cooling_fan", want_cooling,
-           f"온도 상한 초과({temp:.1f}℃>{setpoints.temp_high:.1f}℃)" if want_cooling
-           else "밴드 정상 범위 복귀")
+           _temp_on_reason(True) if want_cooling else _off_reason(temp_mode))
     _apply("heater", want_heater,
-           f"온도 하한 미달({temp:.1f}℃<{setpoints.temp_low:.1f}℃)" if want_heater
-           else "밴드 정상 범위 복귀")
+           _temp_on_reason(False) if want_heater else _off_reason(temp_mode))
     _apply("dehumidifier", want_dehumidifier,
-           f"습도 상한 초과({hum:.1f}%>{setpoints.hum_high:.1f}%)" if want_dehumidifier
-           else "밴드 정상 범위 복귀")
+           _hum_on_reason(True) if want_dehumidifier else _off_reason(hum_mode))
     _apply("humidifier", want_humidifier,
-           f"습도 하한 미달({hum:.1f}%<{setpoints.hum_low:.1f}%)" if want_humidifier
-           else "밴드 정상 범위 복귀")
+           _hum_on_reason(False) if want_humidifier else _off_reason(hum_mode))
 
     return logs
 

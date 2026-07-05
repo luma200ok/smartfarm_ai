@@ -13,7 +13,7 @@ class Setpoints:
     temp_low: float = 20.0
     temp_high: float = 25.0
     hum_low: float = 60.0
-    hum_high: float = 85.0
+    hum_high: float = 80.0  # 이슈 #51 — 중앙 유지형 전환에 맞춰 85→80(중앙 70%)
     temp_deadband: float = 0.5
     hum_deadband: float = 2.0
 

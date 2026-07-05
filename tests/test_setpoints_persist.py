@@ -5,6 +5,13 @@ import control.setpoints as setpoints_mod
 from control.setpoints import Setpoints, load, save, save_changed
 
 
+def test_default_hum_high_is_80_center_hold(tmp_path):
+    """이슈 #51 — 중앙 유지형 전환에 맞춰 습도 상한 기본값 85→80(중앙 70%)."""
+    sp = Setpoints()
+    assert sp.hum_high == 80.0
+    assert sp.hum_low == 60.0  # 하한·중앙은 무변경
+
+
 def test_save_load_roundtrip(tmp_path):
     path = tmp_path / "sp.json"
     sp = Setpoints(temp_low=18.0, temp_high=27.0, hum_low=55.0, hum_high=90.0)

@@ -2,13 +2,13 @@
 import pytest
 
 from control.actuators import default_states
-from control.controller import decide, emergency
+from control.controller import _hum_band_state, decide, emergency
 from control.effects import apply_effects
 from control.setpoints import Setpoints
 
 
 def _sp():
-    return Setpoints()  # 온도 20~25℃, 습도 60~85%, 데드밴드 0.5℃/2.0%p
+    return Setpoints()  # 온도 20~25℃, 습도 60~80%(중앙 70%, 이슈 #51), 데드밴드 0.5℃/2.0%p
 
 
 def _reading(temp=22.0, hum=70.0):
@@ -79,24 +79,25 @@ def test_hysteresis_cooling_turns_off_after_deadband_recovery():
     assert any(log.device == "cooling_fan" and log.action == "OFF" for log in logs)
 
 
-# ── 습도 밴드 중앙 목표 OFF 판정(이슈 #33) ───────────────────────────────
+# ── 습도 밴드 중앙 유지형 판정(이슈 #33, 재설계 #51) ─────────────────────
+# 기본 습도 밴드(이슈 #51) — 60~80%, 중앙(mid)=70.0%, 데드밴드=2.0(해제폭=1.0).
 def test_hum_dehumidifier_stays_on_until_mid_reached():
-    """hum_mode="center"(live 경로 전용, 이슈 #33) — 제습기 ON 후 밴드 안(85% 아래)이어도
-    중앙(72.5%)에서 데드밴드(2.0) 밖이면 유지."""
+    """hum_mode="center"(live 경로 전용) — 제습기 ON 후 밴드 안(80% 아래)이어도
+    중앙(70.0%)에서 데드밴드(2.0) 밖이면 유지."""
     states = default_states()
     decide(_reading(hum=90.0), _sp(), states, date="d1", hum_mode="center")
     assert states["dehumidifier"].on is True
-    logs = decide(_reading(hum=80.0), _sp(), states, date="d2", hum_mode="center")  # 밴드 안, 중앙과 거리 7.5 > 2.0
+    logs = decide(_reading(hum=80.0), _sp(), states, date="d2", hum_mode="center")  # 밴드 안, 중앙과 거리 10.0 > 2.0
     assert states["dehumidifier"].on is True
     assert logs == []
 
 
 def test_hum_dehumidifier_turns_off_near_mid():
-    """hum_mode="center" — 중앙(72.5%) 데드밴드(2.0) 이내로 들어오면 OFF."""
+    """hum_mode="center" — 중앙(70.0%) 해제폭(deadband*0.5=1.0) 이내로 들어오면 OFF."""
     states = default_states()
     decide(_reading(hum=90.0), _sp(), states, date="d1", hum_mode="center")
     assert states["dehumidifier"].on is True
-    logs = decide(_reading(hum=73.0), _sp(), states, date="d2", hum_mode="center")  # |73-72.5|=0.5 <= 2.0
+    logs = decide(_reading(hum=70.5), _sp(), states, date="d2", hum_mode="center")  # |70.5-70.0|=0.5 <= 1.0
     assert states["dehumidifier"].on is False
     assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs)
 
@@ -106,9 +107,19 @@ def test_hum_humidifier_turns_off_near_mid_symmetric():
     states = default_states()
     decide(_reading(hum=50.0), _sp(), states, date="d1", hum_mode="center")
     assert states["humidifier"].on is True
-    logs = decide(_reading(hum=72.0), _sp(), states, date="d2", hum_mode="center")  # |72-72.5|=0.5 <= 2.0
+    logs = decide(_reading(hum=69.5), _sp(), states, date="d2", hum_mode="center")  # |69.5-70.0|=0.5 <= 1.0
     assert states["humidifier"].on is False
     assert any(log.device == "humidifier" and log.action == "OFF" for log in logs)
+
+
+def test_hum_center_mode_enters_high_before_reaching_band_edge():
+    """이슈 #51(중앙 유지형 재설계) — ON 진입이 밴드 경계(80%)가 아니라 중앙+데드밴드
+    (70.0+2.0=72.0%)에서 걸려야 한다. 74%(밴드 안, 경계에는 한참 못 미침)에서도 OFF
+    상태에서 곧바로 제습기가 켜져야 한다 — 구버전(밴드 이탈 시에만 ON)이었다면 이 케이스는
+    켜지지 않아, 외란이 한쪽으로 지속될 때 값이 밴드 상단[72.0, 80]에 갇히는 회귀가 있었다."""
+    states = default_states()
+    decide(_reading(hum=74.0), _sp(), states, date="d1", hum_mode="center")  # dev=4.0 > 2.0
+    assert states["dehumidifier"].on is True
 
 
 def test_hum_edge_mode_is_default_and_matches_temp_hysteresis():
@@ -118,19 +129,19 @@ def test_hum_edge_mode_is_default_and_matches_temp_hysteresis():
     states = default_states()
     decide(_reading(hum=90.0), _sp(), states, date="d1")  # hum_mode 미지정
     assert states["dehumidifier"].on is True
-    # 밴드 안(85% 아래)이라도 경계 히스테리시스 창(high-deadband=83.0) 안쪽까지 와야 OFF —
-    # 중앙(72.5%)까지 갈 필요 없음(edge≠center 확인).
-    logs = decide(_reading(hum=84.0), _sp(), states, date="d2")  # 83.0보다 큼 → 유지
+    # 밴드 안(80% 아래)이라도 경계 히스테리시스 창(high-deadband=78.0) 안쪽까지 와야 OFF —
+    # 중앙(70.0%)까지 갈 필요 없음(edge≠center 확인).
+    logs = decide(_reading(hum=79.0), _sp(), states, date="d2")  # 78.0보다 큼 → 유지
     assert states["dehumidifier"].on is True
     assert logs == []
-    logs2 = decide(_reading(hum=82.0), _sp(), states, date="d3")  # 83.0보다 작음 → OFF
+    logs2 = decide(_reading(hum=77.0), _sp(), states, date="d3")  # 78.0보다 작음 → OFF
     assert states["dehumidifier"].on is False
     assert any(log.device == "dehumidifier" and log.action == "OFF" for log in logs2)
 
 
-# ── 온도 밴드 중앙 목표 OFF 판정(이슈 #45, 습도와 대칭) ───────────────────
+# ── 온도 밴드 중앙 유지형 판정(이슈 #45·재설계 #51, 습도와 대칭) ──────────
 def test_temp_cooling_stays_on_until_mid_reached():
-    """temp_mode="center"(live 경로 전용, 이슈 #45) — 냉방 ON 후 밴드 안(25℃ 아래)이어도
+    """temp_mode="center"(live 경로 전용) — 냉방 ON 후 밴드 안(25℃ 아래)이어도
     중앙(22.5℃)에서 데드밴드(0.5) 밖이면 유지."""
     states = default_states()
     decide(_reading(temp=26.0), _sp(), states, date="d1", temp_mode="center")
@@ -141,23 +152,104 @@ def test_temp_cooling_stays_on_until_mid_reached():
 
 
 def test_temp_cooling_turns_off_near_mid():
-    """temp_mode="center" — 중앙(22.5℃) 데드밴드(0.5) 이내로 들어오면 OFF."""
+    """temp_mode="center" — 중앙(22.5℃) 해제폭(deadband*0.5=0.25) 이내로 들어오면 OFF
+    (이슈 #51 재설계 — 해제폭이 진입폭(0.5)의 절반으로 좁아져, 진입 직후 값(예: 23.0℃,
+    dev=0.5)에서는 아직 유지되고 더 중앙에 가까워져야 OFF된다)."""
     states = default_states()
     decide(_reading(temp=26.0), _sp(), states, date="d1", temp_mode="center")
     assert states["cooling_fan"].on is True
-    logs = decide(_reading(temp=23.0), _sp(), states, date="d2", temp_mode="center")  # |23-22.5|=0.5 <= 0.5
+    logs = decide(_reading(temp=22.7), _sp(), states, date="d2", temp_mode="center")  # |22.7-22.5|=0.2 <= 0.25
     assert states["cooling_fan"].on is False
     assert any(log.device == "cooling_fan" and log.action == "OFF" for log in logs)
 
 
 def test_temp_heater_turns_off_near_mid_symmetric():
-    """temp_mode="center" — 히터도 동일. 중앙 근접 시 OFF(저온 대칭)."""
+    """temp_mode="center" — 히터도 동일. 중앙 근접(해제폭 0.25 이내) 시 OFF(저온 대칭)."""
     states = default_states()
     decide(_reading(temp=19.0), _sp(), states, date="d1", temp_mode="center")
     assert states["heater"].on is True
-    logs = decide(_reading(temp=22.0), _sp(), states, date="d2", temp_mode="center")  # |22-22.5|=0.5 <= 0.5
+    logs = decide(_reading(temp=22.3), _sp(), states, date="d2", temp_mode="center")  # |22.3-22.5|=0.2 <= 0.25
     assert states["heater"].on is False
     assert any(log.device == "heater" and log.action == "OFF" for log in logs)
+
+
+def test_temp_center_mode_enters_high_before_reaching_band_edge():
+    """이슈 #51 — ON 진입이 밴드 경계(25℃)가 아니라 중앙+데드밴드(22.5+0.5=23.0℃)에서
+    걸려야 한다. 23.5℃(밴드 안, 경계에는 한참 못 미침)에서도 OFF 상태에서 곧바로 냉방이
+    켜져야 한다(겨울철 저온 지속 시 하한 정체 회귀와 대칭되는 여름철 회귀 재현)."""
+    states = default_states()
+    decide(_reading(temp=23.5), _sp(), states, date="d1", temp_mode="center")  # dev=1.0 > 0.5
+    assert states["cooling_fan"].on is True
+
+
+def test_temp_center_mode_persists_in_buffer_zone_but_no_fresh_entry():
+    """진입폭(0.5)과 해제폭(0.25) 사이(dev=0.4)는 비대칭 히스테리시스 구간 — 이미 ON인
+    상태에서는 유지되지만, OFF 상태에서 같은 값으로는 새로 켜지지 않는다(채터링 방지)."""
+    sp = _sp()
+    states_on = default_states()
+    decide(_reading(temp=26.0), sp, states_on, date="d1", temp_mode="center")
+    assert states_on["cooling_fan"].on is True
+    decide(_reading(temp=22.9), sp, states_on, date="d2", temp_mode="center")  # dev=0.4
+    assert states_on["cooling_fan"].on is True  # 지속 유지(해제폭 0.25보다 큼)
+
+    states_off = default_states()
+    decide(_reading(temp=22.9), sp, states_off, date="d1", temp_mode="center")  # dev=0.4 <= 0.5
+    assert states_off["cooling_fan"].on is False  # 신규 진입은 안 됨(진입폭 0.5 미달)
+
+
+def test_hum_band_state_narrow_band_hard_boundary_safety_net():
+    """이슈 #51 리뷰 P2-2 — 슬라이더로 밴드를 아주 좁게 잡아 high-mid(1.0) <= deadband(2.0)가
+    되면, 중앙 기준 진입(dev>deadband)만으로는 하드 상한(71.0)을 넘은 값(72.0, dev=2.0)도
+    "normal"이 나올 수 있었다. 하드 경계 안전망이 맨 앞에서 잡아 반드시 "high"가 나와야 한다."""
+    assert _hum_band_state(72.0, 69.0, 71.0, 2.0, False, False) == "high"  # 72>71(하드 상한 초과)
+    assert _hum_band_state(68.0, 69.0, 71.0, 2.0, False, False) == "low"   # 68<69(하드 하한 미달)
+
+
+def test_hum_band_state_wide_band_unaffected_by_safety_net():
+    """넓은 밴드(기본값)에서는 안전망 두 줄이 먼저 발동하지 않는다 — value>high면 항상
+    dev>deadband도 참이라 중앙 기준 진입과 결과가 같다(회귀 없음)."""
+    # 기본 습도 밴드(60~80, mid=70, deadband=2.0) — high-mid=10.0 > deadband(2.0).
+    assert _hum_band_state(85.0, 60.0, 80.0, 2.0, False, False) == "high"
+    assert _hum_band_state(55.0, 60.0, 80.0, 2.0, False, False) == "low"
+
+
+def test_decide_center_mode_reason_reflects_mid_target_not_stale_hard_edge():
+    """이슈 #51 리뷰 P2-1 — center 모드 ON 진입은 mid±deadband 기준인데, reason이 여전히
+    edge용 하드 경계 문구("상한 초과(74.0%>80.0%)")를 쓰면 74.0<80.0인데도 거짓 문구가
+    monitor.py 디스코드 알림·이벤트 테이블에 노출된다. center 모드는 중앙·목표 기준
+    문구("습도 중앙 이탈(74.0% · 목표 70.0%)")를 써야 한다."""
+    states = default_states()
+    logs = decide(_reading(hum=74.0), _sp(), states, date="d1", hum_mode="center")  # dev=4.0>2.0
+    assert states["dehumidifier"].on is True
+    on_log = next(log for log in logs if log.device == "dehumidifier")
+    assert on_log.reason == "습도 중앙 이탈(74.0% · 목표 70.0%)"
+    assert "80.0" not in on_log.reason  # 하드 상한(80.0) 값이 거짓으로 섞여 들면 안 됨
+
+    logs2 = decide(_reading(hum=70.5), _sp(), states, date="d2", hum_mode="center")  # dev=0.5<=1.0
+    off_log = next(log for log in logs2 if log.device == "dehumidifier")
+    assert off_log.reason == "중앙 근접 복귀"
+
+
+def test_decide_center_mode_temp_reason_reflects_mid_target():
+    """온도도 대칭 — center 모드 냉방 ON 사유가 중앙·목표 기준 문구여야 한다."""
+    states = default_states()
+    logs = decide(_reading(temp=23.5), _sp(), states, date="d1", temp_mode="center")  # dev=1.0>0.5
+    on_log = next(log for log in logs if log.device == "cooling_fan")
+    assert on_log.reason == "온도 중앙 이탈(23.5℃ · 목표 22.5℃)"
+    assert "25.0" not in on_log.reason  # 하드 상한(25.0) 값이 거짓으로 섞여 들면 안 됨
+
+
+def test_decide_edge_mode_reason_unchanged_hard_edge_wording():
+    """edge 모드(기본값, 리플레이 경로)는 기존 하드 경계 문구를 그대로 유지해야 한다
+    (하위호환·회귀 방지)."""
+    states = default_states()
+    logs = decide(_reading(hum=90.0), _sp(), states, date="d1")  # hum_mode 미지정=edge
+    on_log = next(log for log in logs if log.device == "dehumidifier")
+    assert on_log.reason == "습도 상한 초과(90.0%>80.0%)"
+
+    logs2 = decide(_reading(hum=70.0), _sp(), states, date="d2")  # 밴드 정상 복귀 → OFF
+    off_log = next(log for log in logs2 if log.device == "dehumidifier")
+    assert off_log.reason == "밴드 정상 범위 복귀"
 
 
 def test_temp_edge_mode_is_default_and_matches_hum_hysteresis():
