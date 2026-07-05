@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-05(UI 디자인 리뉴얼 PR #49 · 핵심지표 관제값 연결 PR #50 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-05(중앙 유지형 제어 통일 PR #54 · LLM 실험 기록 페이지 PR #53 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -39,6 +39,8 @@
 | DB(선택) | PostgreSQL16+pgvector — `RAG_BACKEND=pgvector`·`DATABASE_URL` 설정 시만 사용(기본은 `memory`, npz+무이력 그대로). RAG 검색 저장 + 처방/경보 이력. 미설정·장애 시 자동 폴백 |
 
 ## 📌 다음 작업 (백로그 — roadmap "향후 확장" 참조)
+- [x] **온·습도 중앙 유지형 제어 통일 + 경보 관제값 연결**(이슈 #51 클로즈): 오늘운영 center 모드를 '밴드 밖에서만 ON'→**중앙(mid) 기준 히스테리시스**(진입 deadband·해제 deadband*0.5)로 재설계 → 여름/겨울 지속 외란에서 밴드 끝 정체 없이 중앙 수렴(여름=위·겨울=아래 lean). 습도 밴드 기본값 60~85→**60~80**(중앙 70). 대시보드 경보를 vsensor 원본→**오늘 타임라인 제어한계(`emergency_hours`)** 기준으로(핵심지표와 일관, 잘 제어되면 경보 사라짐). center 모드 사유 문구 정확화·좁은 밴드 하드 안전망 (PR #54). 후속: 카드 칩 vs 배너 습도 임계 간극(#55)
+- [x] **LLM 실험 기록 페이지 신설**(이슈 #52 클로즈): [프로젝트 기록] 그룹에 ML/DL과 나란히 'LLM 실험 기록' 추가(`app/views/llm_eval.py`, dl_eval 미러). phase3_llm 결과 서술 + 처방 지연 개선(28→17~19초·342.6→16.2초) + RAG 코퍼스 통계(문서4·chunk15) + 통합 기대값 회귀. 정형 산출물 없어 서술·통계로 구성, 지어낸 수치 없음 (PR #53)
 - [x] **UI 디자인 리뉴얼**(이슈 #47 클로즈): 순정 Streamlit 룩 → **딥그린 다크(기본) + 라이트 토글 + 톤업**(헤더 그린 띠·아이콘 원 KPI·채운 경보 배너·상태 칩). `ui.py` 디자인 시스템(양 팔레트·`current_theme()`), 대시보드 재구성(Altair 차트·상태 칩), `config.toml` 다크 기본 + 라이트 시 네이티브 컨테이너 CSS 오버라이드. 야외(뙤약볕) 가독 고려한 순백 라이트 (PR #49). 후속(P2): 라이트 시 네이티브 입력 위젯(슬라이더·셀렉트)은 BaseWeb 한계로 다크 잔존
 - [x] **대시보드 핵심지표 관제값 연결**(이슈 #48 클로즈): 핵심 지표(내부 온·습도·외기)를 관제 오늘 운영 **제어 후 값**(`_today_live_kpi`·`assemble_today_timeline`)으로 — KMA 있으면 오늘·제어 후 값, 없으면 가상센서 데모 폴백. CO₂는 가상센서 유지. + monitor 라이트 차트 배경·범례 테마 대응 + 라이트 모드 네이티브 텍스트/탭 가독 수정(reviewer P1 탭 색 회귀 픽스) (PR #50)
 - [x] **온도 P-제어 전환**(이슈 #45 클로즈): 온도도 습도와 대칭으로 밴드 중앙(스윗스팟) 목표 비례 제어(`_temp_pcontrol_delta`, ±2℃/h, `temp_mode="center"` 분리로 리플레이 무영향) — 서모스탯이 외기 높은 낮에 상한 근처에서만 정체하던 문제 해소. 오늘 차트 y축 밴드±20% 유동 확대(PR #44) 동반 · code-reviewer P1 0(P2 죽은 import 제거) (PR #46)
