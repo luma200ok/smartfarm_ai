@@ -1,6 +1,9 @@
 [theme]
-primaryColor = "#4C9A2A"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F1F8E9"
-textColor = "#1B2E12"
+# 이슈 #47 2차 — 딥그린 다크를 기본값으로(런타임 테마 전환 API가 없어 base 자체는 고정).
+# 라이트는 app/ui.py의 inject_css()가 세션 토글(sf_theme)에 따라 CSS로 오버라이드한다.
+base = "dark"
+primaryColor = "#5FD08A"
+backgroundColor = "#0F1C15"
+secondaryBackgroundColor = "#152520"
+textColor = "#E9F2EA"
 font = "sans serif"
