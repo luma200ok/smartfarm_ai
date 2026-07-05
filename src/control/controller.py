@@ -43,7 +43,7 @@ def _hum_band_state(value: float, low: float, high: float, deadband: float,
 
 
 def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
-           hum_mode: str = "edge") -> list[ControlLog]:
+           hum_mode: str = "edge", temp_mode: str = "edge") -> list[ControlLog]:
     """센서값+설정 밴드+현재 장치 상태 → 상태 변화(states 갱신) + 발생한 ControlLog 목록.
 
     수동(auto=False) 장치는 결정 대상에서 제외(현재 상태 그대로 유지, 로그 없음).
@@ -58,6 +58,14 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
     - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state). live(오늘 운영,
       control.live.simulate_control)는 P-제어(시간당 델타가 중앙을 향해 비례 수렴)라
       이 모드를 명시적으로 사용한다.
+
+    temp_mode(이슈 #45, hum_mode와 대칭) — 온도 판정 방식 선택:
+    - "edge"(기본, 하위호환) — 경계 히스테리시스(_band_state). 리플레이(시뮬레이션 탭,
+      app/views/monitor.py._run_control_step)는 이 기본값을 그대로 사용(변경 없음).
+    - "center" — 밴드 중앙(mid) 근접 시 OFF(_hum_band_state 재사용 — 이름은 습도지만
+      로직이 low/high/mid 기준 범용이라 온도에도 그대로 쓴다. 회귀 최소화를 위해
+      리네임하지 않음). live(control.live.simulate_control)는 온도 P-제어(이슈 #45)
+      도입으로 이 모드를 명시적으로 사용한다.
     """
     temp = reading.get("온도내부_평균", (setpoints.temp_low + setpoints.temp_high) / 2)
     hum = reading.get("습도내부_평균", (setpoints.hum_low + setpoints.hum_high) / 2)
@@ -66,8 +74,9 @@ def decide(reading: dict, setpoints, states: dict[str, DeviceState], date=None,
     def cur_on(device: str) -> bool:
         return states[device].on
 
-    temp_state = _band_state(temp, setpoints.temp_low, setpoints.temp_high,
-                              setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
+    temp_band_fn = _hum_band_state if temp_mode == "center" else _band_state
+    temp_state = temp_band_fn(temp, setpoints.temp_low, setpoints.temp_high,
+                               setpoints.temp_deadband, cur_on("cooling_fan"), cur_on("heater"))
     hum_band_fn = _hum_band_state if hum_mode == "center" else _band_state
     hum_state = hum_band_fn(hum, setpoints.hum_low, setpoints.hum_high,
                              setpoints.hum_deadband, cur_on("dehumidifier"), cur_on("humidifier"))
