@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-04(NCPMS 코퍼스 실데이터화 PR #43 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-07-05(온도 P-제어 전환 PR #46 · 오늘 차트 y축 확대 PR #44 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -22,7 +22,7 @@
 | ➕ 날씨 | `src/llm/weather.py`·`tools.py`(get_weather)·`pipeline.py`(weather_qa) | 기상청 단기예보 API — 외기 실황·3일 예보 + 날씨 Q&A(앱 외부날씨 섹션). PR #9·#11, 이슈 #6 1단계 |
 | ➕ 기대값 | `src/ml/train_expect.py`·`src/llm/expect.py`·`monitor.py`(cause·equip_anom·feedforward)·`sim/virtual_sensor.py`(inject) | 외기→실내 기대값 회귀(XGB MAE 1.11/1.44℃) — 원인 구분 경보·조기 감지·사전 경보·시나리오 데모. PR #12·#13, 이슈 #6 완결(+#2 흡수) |
 | ➕ 관제 | `src/control/`(setpoints·actuators·controller·effects)·`app/views/monitor.py` | 규칙 기반(LLM 무관) 설정 밴드+히스테리시스 → 장치 4종(제습기·가습기·쿨링팬·히터, 이슈 #27에서 환기→제습기) 자동 ON/OFF·수동 토글·효과 피드백(inject tag 분리)·제어 로그·긴급 알림(자기정리 dedup). 앱 «환경 관제»로 개편(LLM 코치·날씨 Q&A 제거, pipeline·CLI는 유지). PR #20, 이슈 #17. 설정 밴드는 `data/control_setpoints.json` 파일 영속(전역 공유, 폴백·병합 저장 — PR #22, 이슈 #21) |
-| ➕ 오늘 운영 | `src/control/live.py`·`deploy/smartfarm-control.{service,timer}` | **오늘 날짜 운영 모드**: KMA 실황·시간별 예보 → 기대값 모델로 오늘 내부 기준선 → 밴드 초과 시 장치 ON → 제어 후 값 조정(온도=서모스탯 관성 제어·습도=밴드 중앙 P-제어, 이슈 #27·#33). 앱 [오늘 운영/시뮬레이션] 탭(온·습도 반반 차트+지금 마커·예보 음영, 이슈 #25). 상주 알림: 서버 systemd 타이머 매시 실행 → 장치 전환·이상·긴급 디스코드(`data/control_live_state.json` dedup). PR #24, 이슈 #23 |
+| ➕ 오늘 운영 | `src/control/live.py`·`deploy/smartfarm-control.{service,timer}` | **오늘 날짜 운영 모드**: KMA 실황·시간별 예보 → 기대값 모델로 오늘 내부 기준선 → 밴드 초과 시 장치 ON → 제어 후 값 조정(온도·습도 모두 밴드 중앙 P-제어 — 온도 이슈 #45·습도 #33, 관성 누적 기반). 앱 [오늘 운영/시뮬레이션] 탭(온·습도 반반 차트+지금 마커·예보 음영, 이슈 #25). 상주 알림: 서버 systemd 타이머 매시 실행 → 장치 전환·이상·긴급 디스코드(`data/control_live_state.json` dedup). PR #24, 이슈 #23 |
 
 앱: `streamlit run app/streamlit_app.py` → **서비스형 2그룹 네비**([서비스] 농장 대시보드·잎 병해 진단·AI 처방·환경 관제·작물 환경 추천 / [프로젝트 기록] 개요·성과, ML/DL 실험 기록). `app/views/` 8페이지 + 공통 `ui.py`·`state.py`·`nav.py`·`.streamlit/config.toml` 테마 (이슈 #10, PR #14).
 
@@ -39,6 +39,7 @@
 | DB(선택) | PostgreSQL16+pgvector — `RAG_BACKEND=pgvector`·`DATABASE_URL` 설정 시만 사용(기본은 `memory`, npz+무이력 그대로). RAG 검색 저장 + 처방/경보 이력. 미설정·장애 시 자동 폴백 |
 
 ## 📌 다음 작업 (백로그 — roadmap "향후 확장" 참조)
+- [x] **온도 P-제어 전환**(이슈 #45 클로즈): 온도도 습도와 대칭으로 밴드 중앙(스윗스팟) 목표 비례 제어(`_temp_pcontrol_delta`, ±2℃/h, `temp_mode="center"` 분리로 리플레이 무영향) — 서모스탯이 외기 높은 낮에 상한 근처에서만 정체하던 문제 해소. 오늘 차트 y축 밴드±20% 유동 확대(PR #44) 동반 · code-reviewer P1 0(P2 죽은 import 제거) (PR #46)
 - [x] **관제 시간별 스냅샷 누적**(이슈 #40 클로즈): KMA 예보가 과거 시간대를 안 줘 오늘 차트가 "지금~24시"로 퇴화 → 매시 스냅샷(first-write-wins, 상태 파일 v2 `snapshots`) 누적 + 타임라인 과거=기록·미래=예보 시뮬 합성(`assemble_today_timeline`·`seed_ctrl`) + KMA 실패 시 과거 기록 부분 렌더 + 롤오버 시 `data/control_history.json` 30일 아카이브(추후 실 센서 일별 이력 호환, source 필드) + 원자적 쓰기 `state_io.py` 공용화 — 배포 완료 (PR #41). 후속: 상태 파일 동시 쓰기 레이스(P2)·부분 렌더 기준 시각 라벨(P2)·실 센서 어댑터
 - [x] **습도 기대값 회귀·차트 토글·사전경보 분리**(이슈 #37·#38 클로즈): 실내 습도를 외기+10%p 근사→학습 모델(GKF MAE 7.39%p, 온도 무회귀)로 교체, 비제어 라인 기본 숨김+비교 토글·범례 새 네이밍, 디스코드 현재=🚨긴급/미래=🔮사전 경보 요약/과거 미발송 — 모델 push_models.sh 배포·실검증 (PR #39). 후속 스타일: 차트 실행=빨강 실선·계획=회색 점선(207e513)
 - [x] **관제 차트 정합·자정 연속성**(이슈 #35 클로즈): 제어 후 미래 구간 점선(계획) 분리·축 라벨 잘림 수정 + 타이머가 매시 last_ctrl 기록 → 0시가 어제 제어 값에서 이어짐(멱등성 보장, 폴백=밴드 클램프) (PR #36)
