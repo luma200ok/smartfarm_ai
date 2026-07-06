@@ -39,11 +39,37 @@ def _patch_forecast(monkeypatch, result):
 
 
 # ── _today_live_kpi ──────────────────────────────────────────────────────
-def test_today_live_kpi_none_when_kma_unavailable(monkeypatch):
-    """KMA 키 미설정·조회 실패(outdoor=None)면 None — 호출측이 가상센서로 폴백한다."""
+def test_today_live_kpi_none_when_kma_unavailable_and_no_snapshots(monkeypatch):
+    """KMA 실패(outdoor=None) '그리고' 오늘 스냅샷도 없으면 None — 호출측이 가상센서로
+    폴백한다. 스냅샷이 있으면 아래 test_..._uses_snapshots_when_kma_unavailable처럼
+    제어 후 값을 복원하므로, 이 폴백은 '복원할 기록조차 없을 때'로 한정된다."""
     dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+
     monkeypatch.setattr(dashboard_mod, "_cached_today_outdoor", lambda: None)
+    monkeypatch.setattr(live_mod, "load_today_snapshots", lambda *a, **k: {})
     assert dashboard_mod._today_live_kpi() is None
+
+
+def test_today_live_kpi_uses_snapshots_when_kma_unavailable(monkeypatch):
+    """KMA 실패(outdoor=None)여도 오늘 기록된 스냅샷이 있으면 assemble_today_timeline()이
+    과거 '제어 후' 구간을 복원해 monitor 오늘 운영 탭과 같은 값을 낸다(대시보드 내부 습도가
+    원본 실측 93%가 아니라 제어 후 값을 찍도록 하는 회귀 방지 테스트)."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+
+    now_hour = datetime.now().hour
+    past_hour = (now_hour - 1) % 24
+    monkeypatch.setattr(dashboard_mod, "_cached_today_outdoor", lambda: None)
+    monkeypatch.setattr(live_mod, "load_today_snapshots", lambda *a, **k: {
+        str(past_hour): {"out_temp": 12.0, "base_temp": 25.0, "base_hum": 93.0,
+                         "ctrl_temp": 22.0, "ctrl_hum": 72.0, "devices_on": []},
+    })
+
+    live = dashboard_mod._today_live_kpi()
+    assert live is not None
+    assert live["ctrl_hum"] == 72.0   # 원본 실측 93이 아니라 제어 후 72
+    assert live["out_temp"] == 12.0
 
 
 def test_today_live_kpi_none_when_timeline_empty(monkeypatch):

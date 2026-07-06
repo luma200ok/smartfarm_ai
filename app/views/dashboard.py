@@ -65,17 +65,22 @@ def _today_live_timeline():
     default_states()(전체 자동)로 고정한다 — render_live_tab()과 달리 세션 K_LIVE_DEVICE_STATES는
     쓰지 않는다.
 
-    KMA 미설정·조회 실패·timeline 없음이면 (None, None)을 반환해 호출측이 가상센서 원본으로
-    폴백하게 한다(이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다). _today_live_kpi()
-    (핵심 지표)·render_alert_banner()(경보, 이슈 #51)가 공통으로 재사용한다."""
+    KMA 미설정·조회 실패(outdoor=None)여도, render_live_tab()과 동일하게 오늘 기록된
+    스냅샷(제어 후 값)이 있으면 assemble_today_timeline()이 과거 구간을 복원한다 — 이때
+    핵심 지표(내부 습도 등)가 monitor.py 오늘 운영 탭과 같은 "제어 후" 값을 쓰게 되어
+    두 화면의 불일치(대시보드=원본 93% vs 관제=제어 후 72%)를 없앤다. 스냅샷도 없어
+    timeline이 비면 그때만 (None, None)을 반환해 호출측이 가상센서 원본으로 폴백한다
+    (이슈 #10 C4 — 어떤 경우도 대시보드를 죽이지 않는다). _today_live_kpi()(핵심 지표)·
+    render_alert_banner()(경보, 이슈 #51)가 공통으로 재사용한다."""
     try:
         from control import live as live_mod
         from control.actuators import default_states
         from control.setpoints import load as load_setpoints
 
+        # outdoor=None(KMA 실패)이어도 assemble_today_timeline()에 그대로 넘긴다 — 오늘
+        # 스냅샷이 있으면 과거 "제어 후" 구간을 복원하므로(live.py:455) 여기서 조기
+        # return 하면 monitor 오늘 운영 탭과 값이 어긋난다(대시보드만 원본으로 폴백).
         outdoor = _cached_today_outdoor()
-        if outdoor is None:
-            return None, None
         today = _date.today()
         now_hour = datetime.now().hour
         setpoints = load_setpoints()
