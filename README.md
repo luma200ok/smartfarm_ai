@@ -120,6 +120,8 @@ LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/D
 
 </details>
 
+🚀 [통합 앱 → «AI 처방»·«환경 관제»·«LLM 실험 기록»](https://smartfarm-ai.luma200ok.com/prescribe) · 📄 [수행내역서](docs/phase3_llm.md) · 🔧 [트러블슈팅(LLM)](docs/troubleshooting/troubleshooting.md#llm)
+
 ---
 
 ## 🗂️ 구조 · 데이터 · 실행
@@ -165,7 +167,7 @@ streamlit run app/streamlit_app.py   # 통합 데모(농장 대시보드 + 서�
 ## 🔧 트러블슈팅
 
 프로젝트 진행 중 실제로 막힌 문제 → 원인 → 해결 기록 (한 파일, 파트별 바로가기):
-[**ML**](docs/troubleshooting/troubleshooting.md#ml) · [**DL**](docs/troubleshooting/troubleshooting.md#dl) · [**배포·OCI**](docs/troubleshooting/troubleshooting.md#deploy)
+[**ML**](docs/troubleshooting/troubleshooting.md#ml) · [**DL**](docs/troubleshooting/troubleshooting.md#dl) · [**배포·OCI**](docs/troubleshooting/troubleshooting.md#deploy) · [**LLM**](docs/troubleshooting/troubleshooting.md#llm)
 
 ---
 
