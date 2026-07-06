@@ -31,7 +31,7 @@
 |---|---|---|---|---|
 | **1. ML** | 환경 센서 → 작물 9종 분류 (2022~24 다년) | RandomForest·XGBoost | test F1 0.68 · **GKF 0.49**(누수 교훈) | ✅ 완료 |
 | **2. DL** | 잎 사진 진단(CNN·YOLO) + 환경 시계열(LSTM) | PyTorch·전이학습·Grad-CAM·MLflow | 진단 4분류 acc **0.96** · YOLO 0.78 · LSTM 1.18℃ | ✅ 완료 |
-| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보·알림 | Ollama(qwen2.5:14b + 처방 fast-path writer exaone3.5:2.4b)·function calling·RAG(bge-m3)·디스코드 | 처방+**근거 인용**+환경 교차·코치·경보·**디스코드 알림** | ✅ 완료 |
+| **3. LLM** | 진단+환경 → 자연어 처방·코치·경보·관제 | Ollama(qwen2.5:14b·writer exaone3.5:2.4b)·function calling·RAG(bge-m3)·규칙 관제·디스코드 | **근거 인용** 처방·처방 **fast-path -95%**·**중앙 유지형** 관제·자동 경보 | ✅ 완료 |
 
 > 아래 **Phase별 블록을 하나씩 펼쳐** 핵심 성과·그림·상세를 확인하세요.
 > 문서: [PRD](docs/prd.md) · [로드맵](docs/roadmap.md) · [설계 결정(ADR)](docs/decisions.md)
@@ -92,35 +92,28 @@
 ## 💬 Phase 3 (LLM) — 자연어 처방·코치·경보·알림 (✅ 완료)
 
 <details>
-<summary><b>구현 현황 · 목표 출력 — 펼쳐보기</b></summary>
+<summary><b>📊 핵심 성과 · 그림 · 상세 — 펼쳐보기</b></summary>
 
-**CNN 진단 + LSTM 예측 + 재배가이드(RAG) → LLM 자연어 처방·코치·경보.** 숫자·라벨을 사람이 읽는 "처방"으로.
-LLM은 **로컬 Ollama(qwen2.5:14b)** — 비용 0·오프라인. 진단은 ML/DL, 설명·처방은 LLM(분업).
+CNN 진단 + LSTM 예측 + 재배가이드(RAG) → **LLM 자연어 처방·코치·경보**. 숫자·라벨을 사람이 읽는 "처방"으로. **진단은 ML/DL, 설명·처방은 LLM**(분업 — 환각 위험 차단). LLM은 로컬 Ollama(비용 0·오프라인).
 
-- ✅ **3-1 Ollama function calling** — 진단(get_diagnosis)·검출(get_detection) tool 호출 → 자연어 처방. **환각 방어 3종**(신뢰도 톤 분기·게이트 차단 안내·클래스 한정성).
-- ✅ **3-2 RAG(bge-m3)** — 농사로/NCPMS 재배가이드 검색 → 처방에 **근거 출처 인용**(코드 주입, 환각 배제). 병해 코퍼스(`잎곰팡이병`·`잎마름역병`)는 **NCPMS OpenAPI 실데이터**로 생성(`python -m llm.rag.nongsaro_loader`, `.env`에 `NCPMS_API_KEY` 필요 · NCPMS는 KOGL 제2유형 출처표시·비상업). 바이러스병(TYLCV)·일반 재배는 NCPMS/농사로 API 자료가 빈약해 검수한 수기 코퍼스 유지.
-- ✅ **3-3 통합** — LSTM 환경예측(get_forecast, 다음날 내부온도 MAE 1.11℃) 실연동 → **시간축 처방**(고습 예측 시 환기) + **일일 코치·조기 경보**.
-- ✅ **3-4 알림** — 조기경보·처방을 **디스코드 Webhook**으로 발송(수동 버튼, 기존 smartfarm 웹훅 재사용).
-- ✅ **센서 자동 감시** — `python src/llm/monitor.py --year 2024 --interval 1` : 규칙 임계값(습도≥90·온도≥35/≤5) 위험 시 **자동** 디스코드 알림(중복 방지). `.env`에 `DISCORD_WEBHOOK_URL` 필요.
-- ✅ **기상청 날씨 연동(이슈 #6 1단계)** — 공공데이터포털 단기예보 API로 **외기 실황·3일 예보** 조회(`src/llm/weather.py`) + function calling `get_weather` + **날씨 Q&A**(외기 섹션 질문창, LLM이 토마토 관점 해석). `.env`에 `KMA_SERVICE_KEY` 필요(미설정 시 날씨 섹션만 비활성), 농장 좌표는 `FARM_LAT`/`FARM_LON`(기본 서울).
-- ✅ **날씨 인지 모니터링(이슈 #6 완결)** — "외기 조건 → 정상 시 내부 기대값" 회귀(`src/ml/train_expect.py`, XGB GKF-MAE 평균 1.11℃/최저 1.44℃)로 ①**원인 구분 경보**(같은 저온 이탈도 한파=외기 요인 vs 온화한데 이탈=설비 고장 의심, 잔차 σ 분류) ②**equip_anom** 조기 감지(임계 도달 전 기대 대비 ±2σ 이탈) ③**feedforward 사전 경보**(KMA 예보→내일 내부 최저 예측, `monitor.py --feedforward`) ④가상센서 **시나리오 데모**(한파/히터고장 주입 → 기대값 ±2σ 밴드 차트로 원인 구분 시연). 모델 파일 `models/env_expect_reg.pkl`(gitignore, `push_models.sh` 배포). ⚠️ macOS 로컬에서 torch+xgboost 동시 로드 시 libomp 세그폴트 가능 — `OMP_NUM_THREADS=1`로 실행(서버는 무관).
-- ✅ **PostgreSQL + pgvector(선택)** — `RAG_BACKEND=pgvector`면 RAG 검색이 npz 대신 PG(`rag_chunks`)를 쓰고, 처방·경보가 `prescriptions`/`alerts`에 이력으로 남는다. 기본은 `memory`(현행 npz, PG 불필요)이고 `DATABASE_URL` 미설정 시 완전히 비활성. pgvector 조회 실패 시 자동으로 memory 경로로 폴백(예외 전파 없음). 로컬 개발은 그대로 가볍게, 서버(OCI)만 풀 구성 — 자세한 설치는 `deploy/deploy_oci.md` §8. 로컬(`RAG_BACKEND=memory`)에서도 psycopg·pgvector **패키지**는 설치되지만 PostgreSQL **서버**는 불필요하다.
+- 🏆 **function calling + RAG 처방** — 진단·검출·예측을 tool로 호출 → **근거 출처 인용**(bge-m3) 자연어 처방. **환각 방어 3종**(신뢰도 톤 분기·게이트 차단 안내·클래스 한정성).
+- ⚡ **처방 fast-path** — tool 라운드 제거·writer 모델 분리로 **서버 342.6s→16.2s(-95%)** · 로컬 웜 28→17~19s(-35%). 근거 주입·환각 방어는 그대로 유지.
+- 🌡️ **환경 관제(규칙 기반)** — 오늘 운영 모드: KMA 예보 → 기대값 회귀 기준선 → 장치 4종(제습기·가습기·쿨링팬·히터) **중앙 유지형 P-제어**(여름 71%·겨울 69% 수렴).
+- 🔔 **자동 감시·경보** — systemd 매시 상주 감시, **레벨 전이 시만** 디스코드 발송(dedup) — 현재🚨긴급·미래🔮사전 경보·과거 미발송.
 
-- ✅ **처방 응답 속도 개선(이슈 #15)** — tool 라운드 낭비 생성 캡 + `keep_alive=30m`(콜드 재적재 제거) + 프롬프트 다이어트(-17~20% 토큰) → 로컬 웜 **28s→17~19s(-35%)**, 처방 화면 단계별 진행 표시(`st.status`)로 체감 대기 완화.
-- ✅ **처방 fast-path(이슈 #18)** — 진단·RAG·예보를 코드가 직접 실행, LLM은 최종 JSON 처방 **1-call**만 + writer 모델 분리(`OLLAMA_WRITER_MODEL`, 서버=exaone3.5:2.4b) → **서버 342.6s→16.2s(-95%)**, 로컬 10~15s. agentic(tool calling) 경로는 CLI·날씨 Q&A에 보존.
+![환경 관제 — 오늘 운영 차트](docs/figures/app/monitor_charts.png)
 
-- ✅ **환경 관제 개편(이슈 #17→#21·#25·#27)** — 모니터링 페이지를 **규칙 기반 관제형**으로 전환: 설정 밴드(기본 온도 20~25℃·습도 60~85%, **서버 파일 영속** — 새로고침·재시작에도 유지)+히스테리시스 → 장치 4종 대칭(**제습기·가습기·쿨링팬·히터**) 자동 ON/OFF + 수동 토글 + 제어 로그 + 긴급 디스코드 알림. 효과는 **시간당 상수(±2.0℃/h·±8.0%p/h) 관성(누적) 제어** — 채터링·관통 방지 클램프 포함. LLM 코치·날씨 Q&A는 앱에서 제거(파이프라인·CLI 유지) — 진단·처방만 LLM, 관제는 규칙으로 분업.
-- ✅ **오늘 운영 모드(이슈 #23·#25)** — 리플레이가 아니라 **오늘 날짜로 도는 농장**: 기상청 실황·시간별 예보 → 기대값 모델로 오늘 내부 온·습도 예측 → 밴드 초과 시간대 장치 자동 ON → **제어 후 값이 밴드 안으로 조정**되는 온도(좌)·습도(우) 타임라인 차트(**"지금" 마커 + 이후 예보 구간 음영**). 서버 systemd 타이머(매시)가 장치 전환·이상·긴급을 **디스코드로 상주 발송**(파일 dedup). 기존 리플레이·시나리오는 [시뮬레이션] 탭.
-
-**실행:** `streamlit run app/streamlit_app.py` → «AI 처방»·«환경 관제» 페이지 (Ollama 데몬 + `qwen2.5:14b`·`bge-m3` 필요).
+**상세**
+- **역할별 모델 분리:** 로컬 처방·agentic Q&A=`qwen2.5:14b` / 서버 처방 writer=`exaone3.5:2.4b`(1-call 전용) / 서버 tool calling=`qwen2.5:7b`. exaone의 약한 function calling을 fast-path로 무효화.
+- **RAG 코퍼스:** 병해(`잎곰팡이병`·`잎마름역병`)는 **NCPMS OpenAPI 실데이터**, TYLCV·일반재배는 검수 수기. `RAG_BACKEND=pgvector`면 처방·경보 이력을 PG에 저장(기본 memory=npz).
+- **날씨 인지(이슈 #6):** 외기→정상 내부 기대값 회귀(XGB **GKF-MAE 1.11℃**)로 **원인 구분 경보**(외기 요인 vs 설비 고장) + **feedforward 사전 경보**(KMA 예보→내일 내부 최저).
+- **오늘 차트:** 실행(빨강 실선)·계획(회색 점선) 색 분리 · 과거=매시 스냅샷 누적, 미래=예보 합성으로 0~24시 연속.
 
 **🎯 예시 처방:** 🔬 잎곰팡이병 의심 → 감염 잎 제거·습도↓ · 📖 근거: 농사로/NCPMS · 🌡️ 다음날 고습 예측 → 야간 환기
 
-진행 상황 → [로드맵 Phase 3](docs/roadmap.md)
+🚀 [통합 앱 → «AI 처방»·«환경 관제»·«LLM 실험 기록»](https://smartfarm-ai.luma200ok.com/prescribe) · 📄 [수행내역서](docs/phase3_llm.md) · 🔧 [트러블슈팅(LLM)](docs/troubleshooting/troubleshooting.md#llm)
 
 </details>
-
-🚀 [통합 앱 → «AI 처방»·«환경 관제»·«LLM 실험 기록»](https://smartfarm-ai.luma200ok.com/prescribe) · 📄 [수행내역서](docs/phase3_llm.md) · 🔧 [트러블슈팅(LLM)](docs/troubleshooting/troubleshooting.md#llm)
 
 ---
 
