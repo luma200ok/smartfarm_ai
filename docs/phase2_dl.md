@@ -41,7 +41,7 @@
 | **4 · 데모** | `src/dl/04_demo.py` · `app/views/diagnosis.py`(구 `app/phase2_dl.py`) | `.pt` 저장 → 추론 파이프라인 → Streamlit |
 | **5 · 검출(고급)** | `src/dl/05_detect.py` | YOLO 병해 잎 위치 검출 — 비전 파트의 마지막 두께 |
 
-> `2-N` = 불변 청크 ID(묶음 = STEP). 상세 청크 기록은 `_local/concepts/DL_devlog.md`, 이론은 `DL.md`.
+> `2-N` = 불변 청크 ID(묶음 = STEP). 상세 청크 기록은 `_local/concepts/dl/DL_devlog.md`, 이론은 `DL.md`.
 
 ## 3. 데이터
 ### 3.1 비전 — 토마토 잎 (AI Hub 「시설작물 질병진단」 071)

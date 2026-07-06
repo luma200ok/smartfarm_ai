@@ -68,7 +68,7 @@
 - ✅ 2-11 YOLO 병해 잎 위치 검출 (YOLOv8n 전이학습, **3클래스** normal/leaf_mold/tylcv, **mAP@50 0.78**) ⭐
 - 🏁 **Phase 2 끝 = 사진 올리면 진단+히트맵+위치박스, 작물 1개씩 확장 가능한 파이프라인**
 
-> 청크 상세 = `_local/concepts/DL_devlog.md` · 이론 = `DL.md`.
+> 청크 상세 = `_local/concepts/dl/DL_devlog.md` · 이론 = `DL.md`.
 
 ### Phase 3 — LLM (통합 처방 + 알림) · ⭐⭐⭐ ✅ 완료
 - ✅ 3-1 Ollama(qwen2.5:14b) 연동 (숫자·라벨 → 자연어 처방, function calling + 환각방어 3종)

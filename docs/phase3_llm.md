@@ -4,7 +4,7 @@
 > 설계 계획서로 출발해 구현 완료까지 반영한 기록 — Phase 1·2의 실제 산출물을 입력으로 받아 만들었다.
 > 확정: LLM **Ollama 로컬(`qwen2.5:14b`)** · 알림 **디스코드(Webhook)** · RAG **농사로(nongsaro.go.kr) 재배·방제 가이드 기반**
 > LLM은 로컬 구동(비용 0·오프라인·학습 목적) — `qwen2.5:14b`는 한국어·function calling(tool) 지원이 오픈모델 중 안정적.
-> ← 이전 [phase2_dl.md](phase2_dl.md) · [README 허브](../README.md) · 개념노트 [_local/concepts/LLM.md]
+> ← 이전 [phase2_dl.md](phase2_dl.md) · [README 허브](../README.md) · 개념노트 [_local/concepts/llm/LLM.md]
 
 ---
 
