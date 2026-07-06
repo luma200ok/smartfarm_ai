@@ -124,11 +124,14 @@ CNN 진단 + LSTM 예측 + 재배가이드(RAG) → **LLM 자연어 처방·코�
 
 ```
 smartfarm-ai/
-├── src/ml/        preprocess.py · train.py          (Phase 1)
-├── src/dl/        01_basics ~ 05_detect · prepare_tomato (Phase 2 — CNN·YOLO·LSTM)
-├── app/           streamlit_app.py + views/(dashboard·diagnosis·prescribe·monitor·crops·about·ml_eval·dl_eval)  (Streamlit 멀티페이지, OCI 배포)
+├── src/ml/        preprocess · train · train_expect(기대값 회귀)          (Phase 1)
+├── src/dl/        01_basics ~ 05_detect · prepare_tomato                  (Phase 2 — CNN·YOLO·LSTM)
+├── src/llm/       prescribe · pipeline · rag/ · tools · weather · monitor · notify  (Phase 3 — 처방·RAG·알림)
+├── src/control/   controller · actuators · setpoints · live               (Phase 3 — 규칙 기반 환경 관제)
+├── src/sim/       가상 센서 스트림 (오늘 운영·리플레이)
+├── app/           streamlit_app.py + views/(dashboard·diagnosis·prescribe·monitor·crops·about·ml_eval·dl_eval·llm_eval)  (Streamlit 멀티페이지, OCI 배포)
 ├── data/          데이터 (git 제외 — 포털에서 재다운)
-├── models/        학습 모델 (.pt — git 제외, rsync 배포)
+├── models/        학습 모델 (.pt·.pkl — git 제외, rsync 배포)
 └── docs/          PRD · 로드맵 · ADR · Phase 수행내역서 · 그림 · 트러블슈팅
 ```
 
@@ -139,6 +142,7 @@ smartfarm-ai/
 
 - **ML:** [농촌진흥청 스마트팜 현장 농가 데이터](https://www.data.go.kr/data/15108734/fileData.do) (공공데이터포털)
 - **DL:** [AI Hub 「시설작물 질병진단」(071)](https://aihub.or.kr/aihubdata/data/view.do?dataSetSn=153) · PlantVillage(CC0)
+- **LLM(RAG·날씨):** 농사로/NCPMS 재배·방제 가이드(OpenAPI, KOGL 제2유형) · 기상청 단기예보(공공데이터포털)
 - 데이터는 용량이 커서 git에 포함하지 않음 (위 출처에서 재다운로드) · 상세 → [data_sources.md](docs/data_sources.md)
 
 </details>
