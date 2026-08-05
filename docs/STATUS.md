@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-07-06(중앙 유지형 제어 PR #54 · LLM 실험 기록 PR #53 · 습도 칩 임계 일관화 PR #56 반영)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-08-06(대시보드 최근 7일 차트 실제 달력 기준 교체 PR #58 반영 — control_history 기반 KMA 외기·기대값·제어 후 3계열, 가상센서 replay 시간축 제거)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -39,6 +39,7 @@
 | DB(선택) | PostgreSQL16+pgvector — `RAG_BACKEND=pgvector`·`DATABASE_URL` 설정 시만 사용(기본은 `memory`, npz+무이력 그대로). RAG 검색 저장 + 처방/경보 이력. 미설정·장애 시 자동 폴백 |
 
 ## 📌 다음 작업 (백로그 — roadmap "향후 확장" 참조)
+- [x] **대시보드 최근 7일 차트 실제 달력 기준 교체**(이슈 #57 클로즈): "최근 7일 실측 vs 기대값"이 가상센서(2024 replay) 시간축을 그리던 것을 서버 타이머가 쌓는 `control_history.json`+오늘 스냅샷 기반 **실제 달력 최근 7일** 3계열(KMA 외기 실측 실선/내부 기대값 앰버 점선/제어 후 내부 실선, 일평균)로 교체 — `load_recent_days_avg`(캘린더 7일 창 필터, 리뷰 P2: 결측 시 창 밖 옛 날짜 유입 방지), 7일 미만 "기록 축적 중" 캡션·기록 없음 unavailable 폴백. 로컬엔 history 없음(타이머 서버 전용·gitignore) → 테스트는 scp 사본 (PR #58)
 - [x] **온·습도 중앙 유지형 제어 통일 + 경보 관제값 연결**(이슈 #51 클로즈): 오늘운영 center 모드를 '밴드 밖에서만 ON'→**중앙(mid) 기준 히스테리시스**(진입 deadband·해제 deadband*0.5)로 재설계 → 여름/겨울 지속 외란에서 밴드 끝 정체 없이 중앙 수렴(여름=위·겨울=아래 lean). 습도 밴드 기본값 60~85→**60~80**(중앙 70). 대시보드 경보를 vsensor 원본→**오늘 타임라인 제어한계(`emergency_hours`)** 기준으로(핵심지표와 일관, 잘 제어되면 경보 사라짐). center 모드 사유 문구 정확화·좁은 밴드 하드 안전망 (PR #54).
 - [x] **대시보드 습도 칩 밴드 기준 일관화**(이슈 #55 클로즈): 습도 칩을 제어 후 값일 때 온도 칩과 대칭으로 밴드(hum_low/high) 기준 '주의' 판정 — 배너(밴드)와 카드(구 병해 임계 85/90)가 80~85%에서 어긋나던 것 해소. 폴백(데모)은 병해 임계 유지 (PR #56)
 - [x] **LLM 실험 기록 페이지 신설**(이슈 #52 클로즈): [프로젝트 기록] 그룹에 ML/DL과 나란히 'LLM 실험 기록' 추가(`app/views/llm_eval.py`, dl_eval 미러). phase3_llm 결과 서술 + 처방 지연 개선(28→17~19초·342.6→16.2초) + RAG 코퍼스 통계(문서4·chunk15) + 통합 기대값 회귀. 정형 산출물 없어 서술·통계로 구성, 지어낸 수치 없음 (PR #53)
