@@ -915,6 +915,105 @@ def test_archive_snapshots_prunes_to_30_days(_isolated_history):
     assert "2026-01-01" not in history  # 가장 오래된 것이 프룬됨
 
 
+# ── load_recent_days_avg (이슈 #57, 대시보드 "최근 N일" 차트) ───────────────────
+def test_load_recent_days_avg_averages_hourly_snapshots(_isolated_history):
+    history = {
+        "2026-07-04": {
+            "0": {"out_temp": 20.0, "base_temp": 22.0, "ctrl_temp": 23.0},
+            "12": {"out_temp": 30.0, "base_temp": 28.0, "ctrl_temp": 25.0},
+        },
+    }
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    result = live.load_recent_days_avg(days=7, today=date(2026, 7, 4))
+    assert result["2026-07-04"]["out_temp"] == pytest.approx(25.0)
+    assert result["2026-07-04"]["base_temp"] == pytest.approx(25.0)
+    assert result["2026-07-04"]["ctrl_temp"] == pytest.approx(24.0)
+
+
+def test_load_recent_days_avg_excludes_none_values_from_average(_isolated_history):
+    history = {
+        "2026-07-04": {
+            "0": {"out_temp": None, "base_temp": 22.0, "ctrl_temp": 20.0},
+            "1": {"out_temp": 10.0, "base_temp": None, "ctrl_temp": 24.0},
+        },
+    }
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    result = live.load_recent_days_avg(days=7, today=date(2026, 7, 4))
+    assert result["2026-07-04"]["out_temp"] == pytest.approx(10.0)   # None 제외 후 평균
+    assert result["2026-07-04"]["base_temp"] == pytest.approx(22.0)  # None 제외 후 평균
+    assert result["2026-07-04"]["ctrl_temp"] == pytest.approx(22.0)
+
+
+def test_load_recent_days_avg_truncates_to_recent_n_days(_isolated_history):
+    history = {f"2026-06-{d:02d}": {"0": {"out_temp": float(d), "base_temp": float(d), "ctrl_temp": float(d)}}
+               for d in range(1, 11)}  # 10일치
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    result = live.load_recent_days_avg(days=7, today=date(2026, 6, 10))
+    assert len(result) == 7
+    assert list(result.keys()) == [f"2026-06-{d:02d}" for d in range(4, 11)]  # 오름차순, 최근 7일
+
+
+def test_load_recent_days_avg_gap_does_not_pull_in_dates_outside_calendar_window(_isolated_history):
+    """리뷰 P2 회귀 방지 — 창(days=7) 안에 서버 다운타임 등으로 결측 구간(중간 3일 전 필드
+    None)이 있어도, 개수를 채우려고 캘린더 창(today 기준 최근 7일) 밖의 더 오래된 날짜를
+    끌어오면 안 된다. 반환 키는 전부 창 안에 있어야 하고, 결측만큼 7개 미만이어야 한다
+    (dashboard.py "기록 축적 중" 캡션이 정상 발동하는 전제)."""
+    history = {f"2026-06-{d:02d}": {"0": {"out_temp": float(d), "base_temp": float(d), "ctrl_temp": float(d)}}
+               for d in range(1, 11)}  # 06-01 ~ 06-10, 10일치
+    for d in (6, 7, 8):  # 창 안(06-04~06-10)의 중간 3일을 전 필드 결측으로 만든다
+        history[f"2026-06-{d:02d}"] = {"0": {"out_temp": None, "base_temp": None, "ctrl_temp": None}}
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    today = date(2026, 6, 10)
+    result = live.load_recent_days_avg(days=7, today=today)
+
+    window = {f"2026-06-{d:02d}" for d in range(4, 11)}  # today 기준 최근 7 캘린더일(06-04~06-10)
+    assert set(result.keys()) <= window          # 창 밖 날짜(06-01~03) 유입 없음
+    assert len(result) < 7                        # 결측 3일만큼 자연히 7개 미만
+    assert set(result.keys()) == {"2026-06-04", "2026-06-05", "2026-06-09", "2026-06-10"}
+
+
+def test_load_recent_days_avg_empty_when_no_history_file(_isolated_history):
+    from datetime import date
+    assert live.load_recent_days_avg(days=7, today=date(2026, 7, 4)) == {}
+
+
+def test_load_recent_days_avg_includes_today_snapshot(_isolated_history, _isolated_state):
+    from datetime import date
+    history = {"2026-07-03": {"0": {"out_temp": 20.0, "base_temp": 21.0, "ctrl_temp": 22.0}}}
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    today_state = {"date": "2026-07-04",
+                    "snapshots": {"9": {"out_temp": 26.0, "base_temp": 27.0, "ctrl_temp": 24.0}}}
+    _isolated_state.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_state.write_text(json.dumps(today_state), encoding="utf-8")
+
+    result = live.load_recent_days_avg(days=7, today=date(2026, 7, 4))
+    assert set(result.keys()) == {"2026-07-03", "2026-07-04"}
+    assert result["2026-07-04"]["out_temp"] == pytest.approx(26.0)
+
+
+def test_load_recent_days_avg_day_with_all_fields_none_excluded(_isolated_history):
+    history = {"2026-07-04": {"0": {"out_temp": None, "base_temp": None, "ctrl_temp": None}}}
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    assert live.load_recent_days_avg(days=7, today=date(2026, 7, 4)) == {}
+
+
 # ── simulate_control seed_ctrl (이슈 #40) ───────────────────────────────────────
 def test_simulate_control_seed_ctrl_applies_start_value():
     baseline = _baseline({h: (30.0, 90.0) for h in range(3)})

@@ -438,6 +438,54 @@ def archive_snapshots(prev_state: dict) -> None:
     state_io.save_json_atomic(HISTORY_PATH, history)
 
 
+def load_recent_days_avg(days: int = 7, today: "_date | None" = None) -> dict:
+    """대시보드 "최근 N일" 차트용(이슈 #57) — data/control_history.json(과거, HISTORY_PATH)에
+    오늘 스냅샷(load_today_snapshots())을 합쳐 날짜별 일평균 {date: {out_temp, base_temp,
+    ctrl_temp}}을 반환한다. 시간대별 값이 None인 건 그 필드 평균에서 제외하고, 세 필드 다
+    결측인 날짜는 결과에서 제외한다.
+
+    캘린더 창(이슈 #57 리뷰 P2) — 최근 `days`일은 "유효 데이터가 있는 최근 days개"가 아니라
+    `today` 기준 캘린더 날짜([today-days+1, today])로 먼저 확정한 뒤 그 안에서만 daily를
+    필터링한다. 그래야 서버 다운타임 등으로 중간 날짜가 통째로 결측이어도 그 결측만큼 창을
+    벗어난 더 오래된 날짜가 끌려 들어오지 않고(창이 항상 실제 달력 범위 안에 고정), 결측이
+    있으면 반환 개수가 자연히 `days` 미만이 되어 호출측(dashboard.py)의 "기록 축적 중" 캡션이
+    정상적으로 발동한다. 날짜 오름차순으로 반환.
+
+    control_history.json이 없거나 비어 있으면(로컬 등) 빈 dict(예외 전파 없음, 이슈 #10 C4와
+    동일한 무크래시 원칙) — 호출측이 unavailable() 폴백을 표시한다."""
+    from datetime import timedelta
+
+    from control import state_io
+
+    today = today or datetime.now().date()
+    history = dict(state_io.load_json(HISTORY_PATH))
+
+    today_snap = load_today_snapshots(today)
+    if today_snap:
+        history[today.isoformat()] = today_snap
+
+    fields = ("out_temp", "base_temp", "ctrl_temp")
+    daily = {}
+    for date_str, snapshots in history.items():
+        if not snapshots:
+            continue
+        sums = {f: [] for f in fields}
+        for snap in snapshots.values():
+            if not isinstance(snap, dict):
+                continue
+            for f in fields:
+                v = snap.get(f)
+                if v is not None:
+                    sums[f].append(v)
+        avg = {f: (sum(vals) / len(vals) if vals else None) for f, vals in sums.items()}
+        if any(v is not None for v in avg.values()):
+            daily[date_str] = avg
+
+    window = {(today - timedelta(days=i)).isoformat() for i in range(days)}
+    recent_keys = sorted(k for k in daily if k in window)
+    return {k: daily[k] for k in recent_keys}
+
+
 def assemble_today_timeline(outdoor: "list[dict] | None", setpoints, states, today: "_date",
                              now_hour: int) -> "list[dict]":
     """오늘 타임라인 조립(이슈 #40) — 과거(hour < now_hour)는 기록된 스냅샷으로 복원하고,

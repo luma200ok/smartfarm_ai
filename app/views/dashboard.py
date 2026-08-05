@@ -1,7 +1,7 @@
 """
 농장 대시보드 페이지 — [서비스] 그룹 기본(default) 페이지.
 
-상단 경보 배너 + 핵심 지표 카드 4장 + 최근 7일 실측 vs 기대값 미니 차트 + 기능 바로가기 카드.
+상단 경보 배너 + 핵심 지표 카드 4장 + 최근 7일 외기·내부 추이 미니 차트 + 기능 바로가기 카드.
 모델·데이터가 없는 환경에서도 절대 죽지 않도록 모든 데이터 접근을 try/exists 가드로 감싼다(이슈 #10 C4).
 
 이슈 #47 — 야외 가독 미니멀 리디자인: metric_row(st.metric delta) 대신 kpi_cards(HTML 카드) +
@@ -23,6 +23,12 @@ KMA 키 미설정(로컬/CI)·조회 실패·timeline 없음이면 조용히 가
 (=잘 제어되고 있으면) 경보가 자연히 사라지도록 control.live.emergency_hours()(장치
 풀가동에도 밴드 밖=제어 한계 초과)로 판정한다. KMA 실패 폴백은 기존 vsensor 원본 기반
 monitor.assess() 경로를 그대로 유지.
+
+이슈 #57 — "최근 7일" 미니 차트를 가상센서(2024 작기 리플레이) 시간축이 아니라 실제 달력
+기준으로 교체한다. 서버 systemd 타이머가 data/control_history.json에 시간별 스냅샷을 30일
+보존하므로(control.live.load_recent_days_avg()), 이를 일평균해 외기 실측(KMA)·내부 기대값
+(모델 기준선)·제어 후 내부 3계열로 그린다. 가상센서 기반 로직(vs.window())은 완전히
+제거했다(사용자 확정 — 교체, 병행 아님). history 기록이 없으면(로컬 등) unavailable() 폴백.
 """
 from datetime import date as _date
 from datetime import datetime
@@ -46,6 +52,15 @@ _CHART_PALETTE = {
     "dark": {"accent": "#5FD08A", "bg": "#0F1C15", "grid": "#1C2C22", "axis_text": "#6F8577"},
     "light": {"accent": "#3F7D23", "bg": "#FFFFFF", "grid": "#EEF1EA", "axis_text": "#9AA891"},
 }
+
+# 최근 N일 다계열 차트 계열 색(이슈 #57) — 제어 후 내부는 위 _CHART_PALETTE의 accent(테마
+# 대응)를 그대로 쓰고, 외기 실측·내부 기대값은 monitor.py _TREND_PALETTE와 동일 방침(테마와
+# 무관하게 고정)으로 다크/라이트 전환 시에도 계열 식별이 흔들리지 않게 한다.
+# (이슈 #57 리뷰 P3) 내부 기대값 색은 원래 라이트 팔레트의 axis_text("#9AA891")와 완전히
+# 동일해 라이트 테마에서 점선이 축 라벨에 묻혔다 — 앰버(#D97706)로 교체해 라이트(흰 배경)·
+# 다크(짙은 배경) 양쪽에서 축 라벨·그리드·외기(블루)·제어 후(그린) 어느 계열과도 구분되게 했다.
+_RECENT_OUT_COLOR = "#4C9BE8"
+_RECENT_BASE_COLOR = "#D97706"
 
 
 @st.cache_data(ttl=60)
@@ -272,40 +287,49 @@ def render_metric_cards(vs, live=None):
     ])
 
 
-def _recent_trend_chart(rows: list[dict]):
-    """최근 7일 실측 vs 기대값 Altair 차트(이슈 #47) — y축을 데이터 범위(min/max ±8% 여유)로
-    확대(0부터 시작 금지), 실측=실선+area fill(끝점만 테두리 마커), 기대값=점선. monitor.py의
-    _live_trend_chart y축 확대 패턴을 참고했다. 옅은 가로 그리드 + 색은 현재 테마(다크/라이트)에
-    맞춰 갈아 낀다(ui.current_theme())."""
+def _recent_multi_trend_chart(rows: "list[dict]"):
+    """최근 N일 외기·내부 추이 Altair 차트(이슈 #57) — 일평균 3계열(외기 실측/내부 기대값/
+    제어 후 내부)을 한 차트에 그린다. y축은 데이터 범위(min/max ±8% 여유)로 확대(0부터 시작
+    금지, 기존 _recent_trend_chart와 동일 패턴). 외기 실측·제어 후 내부는 실선, 내부 기대값
+    (모델 기준선)은 점선으로 구분한다(monitor.py _live_trend_chart의 strokeDash 패턴 참고).
+    배경·그리드·축 색만 테마에 따라 갈아 끼우고(ui.current_theme()), 계열 색 자체는 테마와
+    무관하게 고정한다(monitor.py _TREND_PALETTE와 동일 방침).
+
+    표시할 값이 전혀 없으면(모든 계열 결측) None을 반환해 호출측이 unavailable()로 안내하게
+    한다."""
     import altair as alt
     import pandas as pd
 
     pal = _CHART_PALETTE.get(current_theme(), _CHART_PALETTE["dark"])
+    colors = {"외기 실측": _RECENT_OUT_COLOR, "내부 기대값": _RECENT_BASE_COLOR,
+              "제어 후 내부": pal["accent"]}
 
     df = pd.DataFrame(rows)
-    vals = pd.concat([df["실측"], df["기대값"]]).dropna()
-    lo, hi = float(vals.min()), float(vals.max())
+    long_df = df.melt(id_vars=["날짜"], value_vars=list(colors.keys()),
+                       var_name="구분", value_name="값").dropna(subset=["값"])
+    if long_df.empty:
+        return None
+
+    lo, hi = float(long_df["값"].min()), float(long_df["값"].max())
     pad = (hi - lo) * 0.08 or 1.0
     y_scale = alt.Scale(domain=[lo - pad, hi + pad], zero=False, nice=False, clamp=True)
 
-    x_enc = alt.X("날짜:N", title=None, sort=None)
-    area = alt.Chart(df).mark_area(color=pal["accent"], opacity=0.22).encode(
-        x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale),
+    long_df["_선"] = long_df["구분"].apply(lambda v: "점선" if v == "내부 기대값" else "실선")
+
+    chart = alt.Chart(long_df).mark_line(strokeWidth=2.2, point=True).encode(
+        x=alt.X("날짜:N", title=None, sort=None),
+        y=alt.Y("값:Q", title=None, scale=y_scale),
+        color=alt.Color("구분:N", title=None,
+                         scale=alt.Scale(domain=list(colors.keys()), range=list(colors.values())),
+                         legend=alt.Legend(orient="bottom", title=None)),
+        strokeDash=alt.StrokeDash("_선:N", legend=None,
+                                   scale=alt.Scale(domain=["실선", "점선"], range=[[1, 0], [5, 4]])),
     )
-    expect_line = alt.Chart(df).mark_line(
-        color=pal["accent"], strokeWidth=1.6, strokeDash=[5, 4], opacity=0.65, point=False,
-    ).encode(x=x_enc, y=alt.Y("기대값:Q", title=None, scale=y_scale))
-    actual_line = alt.Chart(df).mark_line(
-        color=pal["accent"], strokeWidth=2.4, point=False,
-    ).encode(x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale))
-    end_point = alt.Chart(df.iloc[[-1]]).mark_circle(
-        size=90, color=pal["accent"], stroke=pal["bg"], strokeWidth=2,
-    ).encode(x=x_enc, y=alt.Y("실측:Q", title=None, scale=y_scale))
 
     # 이슈 #47 2차 — Streamlit은 config.toml의 base(다크 고정)를 따라 Vega 차트에도 자체 다크
     # 테마를 입혀서, 라이트 토글 시에도 차트 배경만 그대로 어둡게 남는 버그가 있었다. 차트
     # 배경(configure background)을 현재 팔레트로 명시해 항상 앱 배경과 일치시킨다.
-    return (area + expect_line + actual_line + end_point).properties(height=220).configure(
+    return chart.properties(height=240).configure(
         background=pal["bg"]
     ).configure_view(
         strokeWidth=0, fill=pal["bg"],
@@ -314,39 +338,44 @@ def _recent_trend_chart(rows: list[dict]):
         labelColor=pal["axis_text"], labelFontSize=9, tickCount=4,
     ).configure_axisX(
         domain=False, ticks=False, labelColor=pal["axis_text"], labelFontSize=10,
+    ).configure_legend(
+        labelColor=pal["axis_text"], labelFontSize=10, symbolType="stroke",
     )
 
 
-def render_recent_chart(vs):
-    """최근 7일 실측 vs 기대값 미니 차트 — 기대값 모델 없으면 생략."""
+def render_recent_chart():
+    """최근 7일(실제 달력 기준) 외기·내부 추이 미니 차트(이슈 #57) — data/control_history.json
+    (서버 systemd 타이머가 시간별로 30일 보존)의 일평균 3계열(외기 실측=KMA·내부 기대값=모델
+    기준선·제어 후 내부)로 그린다. 가상 센서(2024 작기 리플레이) 시간축을 쓰던 기존 로직은
+    제거했다(사용자 확정 — 교체, 병행 아님) — 이제 실제 오늘 날짜 기준으로 표시된다.
+
+    history가 7일 미만이면 있는 만큼만 표시하고 캡션으로 안내하며, 아예 없으면(로컬 등)
+    unavailable() 폴백을 보여준다(이슈 #10 C4 무크래시 원칙과 동일, 모델·데이터 없어도
+    대시보드가 죽지 않아야 함)."""
     try:
-        from dl import infer
-        from llm import expect as expect_mod
+        from control import live as live_mod
+        daily = live_mod.load_recent_days_avg(days=7)
     except Exception:
+        daily = {}
+
+    if not daily:
+        unavailable("최근 7일 외기·내부 추이", "control_history.json 기록 없음",
+                     "서버 타이머가 하루 이상 누적되면 표시돼요")
         return
 
-    expect_model = expect_mod.load_model()
-    if expect_model is None:
-        unavailable("실측 vs 기대값 차트", "기대값 모델(models/env_expect_reg.pkl) 없음")
+    rows = [{"날짜": date_str, "외기 실측": d.get("out_temp"),
+             "내부 기대값": d.get("base_temp"), "제어 후 내부": d.get("ctrl_temp")}
+            for date_str, d in sorted(daily.items())]
+
+    chart = _recent_multi_trend_chart(rows)
+    if chart is None:
+        unavailable("최근 7일 외기·내부 추이", "표시할 값 없음")
         return
 
-    try:
-        live = vs.window()
-        win_dates = vs.dates[vs.cursor - infer.WINDOW + 1: vs.cursor + 1]
-        rows = []
-        for i, d in enumerate(win_dates):
-            day_reading = {"온도외부_평균": float(live[i][infer.ENV_FEATURES.index("온도외부_평균")]),
-                           "일사량_평균": float(live[i][infer.ENV_FEATURES.index("일사량_평균")])}
-            day_exp = expect_mod.predict(expect_model, day_reading, d)
-            actual = float(live[i][infer.ENV_FEATURES.index("온도내부_평균")])
-            if day_exp is not None:
-                rows.append({"날짜": d, "실측": actual, "기대값": day_exp["평균"]})
-        if rows:
-            st.altair_chart(_recent_trend_chart(rows), use_container_width=True)
-        else:
-            unavailable("실측 vs 기대값 차트", "최근 구간 기대값 계산 실패")
-    except Exception:
-        unavailable("실측 vs 기대값 차트", "차트 생성 중 오류")
+    st.altair_chart(chart, use_container_width=True)
+    if len(rows) < 7:
+        st.caption(f"기록 축적 중 — {len(rows)}일치")
+    st.caption("출처: 외기 실측=기상청(KMA) 실황 기록 · 내부 기대값·제어 후=제어 시뮬레이션(control_history.json)")
 
 
 def render_shortcuts():
@@ -403,8 +432,8 @@ def render():
         section("핵심 지표", f"재생 작기 {year} · 최신 날짜 {vs.date()} · 데모(리플레이) 데이터")
     render_metric_cards(vs, live)
 
-    section("최근 7일 실측 vs 기대값")
-    render_recent_chart(vs)
+    section("최근 7일 외기·내부 추이")
+    render_recent_chart()
 
     st.divider()
     section("기능 바로가기")
