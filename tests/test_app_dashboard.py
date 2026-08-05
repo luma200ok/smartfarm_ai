@@ -399,7 +399,7 @@ def test_render_calls_today_live_timeline_only_once(monkeypatch):
     monkeypatch.setattr(dashboard_mod, "_today_live_kpi",
                          lambda live_timeline=None: kpi_args.append(live_timeline) or None)
     monkeypatch.setattr(dashboard_mod, "render_metric_cards", lambda vs, live=None: None)
-    monkeypatch.setattr(dashboard_mod, "render_recent_chart", lambda vs: None)
+    monkeypatch.setattr(dashboard_mod, "render_recent_chart", lambda: None)
     monkeypatch.setattr(dashboard_mod, "render_shortcuts", lambda: None)
     fake_vs = _FakeVS({})
     fake_vs.date = lambda: date.today()
@@ -430,3 +430,78 @@ def test_render_metric_cards_unavailable_on_vsensor_reading_failure(monkeypatch)
                                                           "out_temp": 1, "today": date.today(),
                                                           "setpoints": None})
     assert calls and calls[0][0] == "핵심 지표"
+
+
+# ── render_recent_chart / _recent_multi_trend_chart (이슈 #57) ─────────────────
+def test_recent_multi_trend_chart_returns_none_when_all_values_missing():
+    """세 계열이 모두 결측인 rows면 None을 반환해 호출측이 unavailable()로 폴백하게 한다."""
+    dashboard_mod = _import_dashboard_module()
+    rows = [{"날짜": "2026-08-01", "외기 실측": None, "내부 기대값": None, "제어 후 내부": None}]
+    assert dashboard_mod._recent_multi_trend_chart(rows) is None
+
+
+def test_recent_multi_trend_chart_builds_chart_with_partial_values():
+    """일부 계열만 값이 있어도(예: 제어 후 내부만) 예외 없이 차트 객체를 반환한다."""
+    dashboard_mod = _import_dashboard_module()
+    rows = [
+        {"날짜": "2026-08-01", "외기 실측": 20.0, "내부 기대값": None, "제어 후 내부": 22.0},
+        {"날짜": "2026-08-02", "외기 실측": 21.0, "내부 기대값": 23.0, "제어 후 내부": 24.0},
+    ]
+    chart = dashboard_mod._recent_multi_trend_chart(rows)
+    assert chart is not None
+
+
+def test_render_recent_chart_unavailable_when_no_history(monkeypatch):
+    """control_history.json 기록이 전혀 없으면(load_recent_days_avg == {}) unavailable() 안내로
+    조용히 종료한다(이슈 #10 C4 무크래시 원칙)."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+    monkeypatch.setattr(live_mod, "load_recent_days_avg", lambda days=7: {})
+
+    calls = []
+    monkeypatch.setattr(dashboard_mod, "unavailable",
+                         lambda feature, reason, hint=None: calls.append((feature, reason)))
+
+    dashboard_mod.render_recent_chart()
+    assert calls and calls[0][0] == "최근 7일 외기·내부 추이"
+
+
+def test_render_recent_chart_renders_when_history_present(monkeypatch):
+    """7일치 기록이 있으면 altair_chart를 호출하고 '기록 축적 중' 안내는 표시하지 않는다."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+    import streamlit as st
+
+    daily = {f"2026-07-{d:02d}": {"out_temp": 20.0 + d, "base_temp": 21.0 + d, "ctrl_temp": 22.0 + d}
+              for d in range(1, 8)}
+    monkeypatch.setattr(live_mod, "load_recent_days_avg", lambda days=7: daily)
+
+    altair_calls = []
+    caption_calls = []
+    monkeypatch.setattr(st, "altair_chart", lambda chart, **k: altair_calls.append(chart))
+    monkeypatch.setattr(st, "caption", lambda text: caption_calls.append(text))
+
+    dashboard_mod.render_recent_chart()
+
+    assert len(altair_calls) == 1
+    assert not any("기록 축적 중" in c for c in caption_calls)
+    assert any("출처" in c for c in caption_calls)
+
+
+def test_render_recent_chart_shows_partial_days_caption(monkeypatch):
+    """history가 7일 미만이면 '기록 축적 중 — N일치' 캡션으로 안내한다."""
+    dashboard_mod = _import_dashboard_module()
+    from control import live as live_mod
+    import streamlit as st
+
+    daily = {f"2026-07-{d:02d}": {"out_temp": 20.0, "base_temp": 21.0, "ctrl_temp": 22.0}
+              for d in range(1, 4)}  # 3일치
+    monkeypatch.setattr(live_mod, "load_recent_days_avg", lambda days=7: daily)
+
+    caption_calls = []
+    monkeypatch.setattr(st, "altair_chart", lambda chart, **k: None)
+    monkeypatch.setattr(st, "caption", lambda text: caption_calls.append(text))
+
+    dashboard_mod.render_recent_chart()
+
+    assert any("기록 축적 중 — 3일치" in c for c in caption_calls)
