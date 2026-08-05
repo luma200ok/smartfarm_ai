@@ -962,6 +962,28 @@ def test_load_recent_days_avg_truncates_to_recent_n_days(_isolated_history):
     assert list(result.keys()) == [f"2026-06-{d:02d}" for d in range(4, 11)]  # 오름차순, 최근 7일
 
 
+def test_load_recent_days_avg_gap_does_not_pull_in_dates_outside_calendar_window(_isolated_history):
+    """리뷰 P2 회귀 방지 — 창(days=7) 안에 서버 다운타임 등으로 결측 구간(중간 3일 전 필드
+    None)이 있어도, 개수를 채우려고 캘린더 창(today 기준 최근 7일) 밖의 더 오래된 날짜를
+    끌어오면 안 된다. 반환 키는 전부 창 안에 있어야 하고, 결측만큼 7개 미만이어야 한다
+    (dashboard.py "기록 축적 중" 캡션이 정상 발동하는 전제)."""
+    history = {f"2026-06-{d:02d}": {"0": {"out_temp": float(d), "base_temp": float(d), "ctrl_temp": float(d)}}
+               for d in range(1, 11)}  # 06-01 ~ 06-10, 10일치
+    for d in (6, 7, 8):  # 창 안(06-04~06-10)의 중간 3일을 전 필드 결측으로 만든다
+        history[f"2026-06-{d:02d}"] = {"0": {"out_temp": None, "base_temp": None, "ctrl_temp": None}}
+    _isolated_history.parent.mkdir(parents=True, exist_ok=True)
+    _isolated_history.write_text(json.dumps(history), encoding="utf-8")
+
+    from datetime import date
+    today = date(2026, 6, 10)
+    result = live.load_recent_days_avg(days=7, today=today)
+
+    window = {f"2026-06-{d:02d}" for d in range(4, 11)}  # today 기준 최근 7 캘린더일(06-04~06-10)
+    assert set(result.keys()) <= window          # 창 밖 날짜(06-01~03) 유입 없음
+    assert len(result) < 7                        # 결측 3일만큼 자연히 7개 미만
+    assert set(result.keys()) == {"2026-06-04", "2026-06-05", "2026-06-09", "2026-06-10"}
+
+
 def test_load_recent_days_avg_empty_when_no_history_file(_isolated_history):
     from datetime import date
     assert live.load_recent_days_avg(days=7, today=date(2026, 7, 4)) == {}
