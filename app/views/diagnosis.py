@@ -58,8 +58,10 @@ def overlay(img, cam):
 
 
 # ── API 모드 렌더(이슈 #59 PR 3) ─────────────────────────────────────────
-# SMARTFARM_API_URL 설정 시 in-process 추론(infer.*) 대신 /api/diagnoses 를 호출해
-# 같은 화면을 그린다. in-process 경로(render() 안의 기존 if/elif/else)는 그대로 둔다.
+# SMARTFARM_API_URL 설정 시 in-process 추론(infer.*) 대신 서빙 API를 호출해 같은 화면을
+# 그린다 — 탭1(진단+Grad-CAM)은 /api/diagnoses, 탭2(YOLO 검출·게이트 없음)는 /api/detections
+# (PR 3-1, 탭2가 게이트 있는 /api/diagnoses를 재사용하면 in-process와 결과가 달라지고
+# Grad-CAM도 낭비 계산돼 분리). in-process 경로(render() 안의 기존 if/elif/else)는 그대로 둔다.
 def _render_diagnosis_api(pil, image_bytes):
     """탭1(진단): /api/diagnoses 1회 호출 → cam_png_base64 를 그대로 디코드해 표시.
 
@@ -102,26 +104,22 @@ def _render_diagnosis_api(pil, image_bytes):
 
 
 def _render_detect_api(pil2, image_bytes, conf):
-    """탭2(YOLO 검출): /api/diagnoses(진단+검출 결합 응답)에서 ``yolo`` 부분만 써서 렌더.
+    """탭2(YOLO 검출): /api/detections(검출 전용, 게이트 없음) 호출 → 결과 렌더.
 
-    확정 API 계약엔 검출 전용 엔드포인트가 없어(진단·검출이 한 응답) 이 탭도 같은 엔드포인트를
-    쓴다 — OOD/부위 게이트에 걸리면(in-process 탭2엔 없던 게이트) 검출 결과 없이 사유만 안내한다.
+    in-process 탭2도 OOD/부위 게이트 없이 바로 infer.detect_annotated()를 호출하므로(이슈 #59
+    PR 3-1), 이 함수도 게이트 있는 /api/diagnoses 대신 /api/detections를 써서 두 모드의
+    결과가 동일하게 유지된다(+ 탭2에서 불필요한 Grad-CAM 계산도 서버에서 하지 않는다).
     """
-    from api_client import ApiClientError, decode_png_base64, diagnose_remote
+    from api_client import ApiClientError, decode_png_base64, detect_remote
 
     try:
-        resp = diagnose_remote(image_bytes, conf=conf)
+        resp = detect_remote(image_bytes, conf=conf)
     except ApiClientError as e:
         st.error(str(e))
         return
 
-    if resp["ood_blocked"] or not resp.get("yolo"):
-        st.info(f"검출 결과가 없어요 — {resp.get('reason') or '게이트에서 차단됐어요.'}")
-        return
-
-    yolo = resp["yolo"]
-    dets = [(b["label"], b["conf"]) for b in yolo["boxes"]]
-    st.image(decode_png_base64(yolo["annotated_png_base64"]),
+    dets = [(b["label"], b["conf"]) for b in resp["boxes"]]
+    st.image(decode_png_base64(resp["annotated_png_base64"]),
               caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도", use_container_width=True)
     if dets:
         st.subheader(f"검출 {len(dets)}건")
@@ -259,7 +257,7 @@ def render():
             if pil2 is not None:
                 st.divider()
                 if api:
-                    # API 모드(SMARTFARM_API_URL 설정) — /api/diagnoses 경유(yolo 필드만 사용), 폴백 안 함
+                    # API 모드(SMARTFARM_API_URL 설정) — /api/detections 경유(게이트 없음), 폴백 안 함
                     _render_detect_api(pil2, image_bytes2, conf)
                 else:
                     annotated, dets = infer.detect_annotated(pil2, conf=conf)
