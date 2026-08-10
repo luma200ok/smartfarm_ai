@@ -12,6 +12,7 @@ joblib                   # .pkl 로드
 # Streamlit 멀티페이지 (st.navigation → 1.40+)
 streamlit>=1.40
 altair>=5.0,<6           # app/views/monitor.py 오늘 운영 추이 차트(이슈 #25) — streamlit 전이 의존성에 우연히 의존 중이던 것을 명시
+requests>=2.31           # app/api_client.py 서빙 API 클라이언트(이슈 #59 PR 3) — streamlit 전이 의존이지만 직접 import라 명시
 
 # Phase 2 — DL (aarch64: torch/torchvision CPU 휠 자동)
 torch>=2.2
