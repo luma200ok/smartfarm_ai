@@ -3,6 +3,8 @@
 predict_with_cam·detect_annotated 는 이슈 #59(app/views/diagnosis.py 중복 흡수)로
 추가된 UI 전용 반환 형태 — diagnose()/detect() 와 같은 게이트·모델을 재사용하는지도 검증한다.
 """
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 from PIL import Image
 
@@ -76,3 +78,21 @@ def test_detect_annotated_agrees_with_detect_classes(leaf_image):
     boxes = infer.detect(pil)
     _, dets = infer.detect_annotated(pil)
     assert sorted(b["cls"] for b in boxes) == sorted(lab for lab, _ in dets)
+
+
+def test_predict_with_cam_concurrent_calls_are_consistent(leaf_image):
+    """code-reviewer P2 — 공유 모델(lru_cache)에 backward를 수행하는 구간을 _cam_lock으로
+    직렬화했는지 회귀 검증(후속 FastAPI PR의 threadpool 동시 요청 대비). 5스레드 동시 호출
+    에도 매번 같은 라벨·확률로 수렴해야 한다(레이스가 있으면 .grad 오염으로 흔들린다)."""
+    pil = Image.open(leaf_image)
+    baseline_label, baseline_prob, _, _, _ = infer.predict_with_cam(pil)
+
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        results = list(ex.map(lambda _: infer.predict_with_cam(pil), range(5)))
+
+    for label, prob, probs, cam, img in results:
+        assert label == baseline_label
+        assert abs(prob - baseline_prob) < 1e-4
+        assert probs.shape == (len(infer.CLASSES),)
+        assert cam.shape == (224, 224)
+        assert img.shape == (224, 224, 3)

@@ -69,7 +69,7 @@ def render():
                      "1) `python src/dl/prepare_tomato.py`\n"
                      "2) `python src/dl/02_core.py --chunk 2-5`")
         else:
-            _load_model()
+            _load_model()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
             st.caption("이 모델은 토마토 잎 사진 전용이에요. "
                        "업로드하면 먼저 잎/비잎을 판별해, 잎이 아닌 이미지는 진단하지 않아요.")
             up = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="diag")
@@ -145,7 +145,7 @@ def render():
                      "1) `python src/dl/prepare_tomato_yolo.py`\n"
                      "2) `python src/dl/05_detect.py`")
         else:
-            _load_yolo()
+            _load_yolo()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
             up2 = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="detect")
             conf = st.slider("신뢰도 임계값(conf)", 0.05, 0.9, 0.25, 0.05)
 

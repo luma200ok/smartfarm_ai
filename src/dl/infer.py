@@ -16,6 +16,7 @@ diagnose·detect 는 LLM 처방 도구(src/llm/tools.py)가 쓰는 요약 형태
 """
 import json
 import logging
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -25,6 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 _log = logging.getLogger(__name__)
+_cam_lock = threading.Lock()   # predict_with_cam()의 공유 모델 backward 구간 직렬화용(아래 참조)
 
 ROOT = Path(__file__).resolve().parents[2]          # 배포 안전(절대경로 하드코딩 지양)
 MODELS = ROOT / "models"
@@ -93,33 +95,36 @@ def predict_with_cam(pil):
     model = load_diagnosis_model()
     x = _tf()(pil.convert("RGB")).unsqueeze(0).to(device).requires_grad_(True)
 
-    store = {}
-    layer = model.layer4[-1]
+    # 공유 모델(lru_cache)에 backward를 수행하므로 동시 호출을 직렬화한다(FastAPI threadpool 대비).
+    with _cam_lock:
+        store = {}
+        layer = model.layer4[-1]
 
-    def _save(_m, _i, o):
-        o.retain_grad()
-        store["act"] = o
-    handle = layer.register_forward_hook(_save)
+        def _save(_m, _i, o):
+            o.retain_grad()
+            store["act"] = o
+        handle = layer.register_forward_hook(_save)
 
-    logits = model(x)
-    probs = torch.softmax(logits, dim=1)[0]
-    cls = int(probs.argmax())
-    model.zero_grad()
-    logits[0, cls].backward()
+        logits = model(x)
+        probs = torch.softmax(logits, dim=1)[0]
+        cls = int(probs.argmax())
+        model.zero_grad()
+        logits[0, cls].backward()
 
-    act = store["act"].detach()[0]
-    grad = store["act"].grad[0]
+        act = store["act"].detach()[0]
+        grad = store["act"].grad[0].detach()
+        handle.remove()
+
     w = grad.mean(dim=(1, 2))
     cam = torch.relu((w[:, None, None] * act).sum(0))
     cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
     cam = F.interpolate(cam[None, None], size=(224, 224),
                         mode="bilinear", align_corners=False)[0, 0].detach().cpu().numpy()
-    handle.remove()
 
     # 표시용 원본(정규화 역연산)
     img = x.detach()[0].cpu().numpy().transpose(1, 2, 0)
     img = (img * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)).clip(0, 1)
-    return CLASSES[cls], float(probs[cls]), probs.detach().cpu().numpy(), cam, img
+    return CLASSES[cls], float(probs[cls].detach()), probs.detach().cpu().numpy(), cam, img
 
 
 # ── 부위 게이트 (과실/꽃/잎/줄기) ─────────────────────────────────────────
