@@ -35,6 +35,41 @@ def test_diagnoses_passes_for_leaf(api_client, leaf_image):
         assert set(box) == {"label", "conf"}
     annotated_png = base64.b64decode(body["yolo"]["annotated_png_base64"])
     assert annotated_png[:8] == b"\x89PNG\r\n\x1a\n"
+    # 성공 응답엔 plant_score·part_prob를 안 싣는다(게이트 차단 안내 문구 전용 필드 — P2-2)
+    assert body["plant_score"] is None
+    assert body["part_prob"] is None
+
+
+# ── P2-1: include_visuals=False — Grad-CAM·YOLO 계산 생략(처방 뷰 재사용 시 비용 절감) ──
+def test_diagnoses_include_visuals_false_omits_cam_and_yolo(api_client, leaf_image):
+    r = _post_image(api_client, leaf_image, params={"include_visuals": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ood_blocked"] is False
+    assert body["label"] in infer.CLASSES
+    assert body["label_kr"] == infer.LABEL_KR[body["label"]]
+    assert body["part"] == "leaf"
+    assert 0.0 <= body["prob"] <= 1.0
+    assert abs(sum(body["probs"].values()) - 1.0) < 1e-3
+    assert body["cam_png_base64"] is None
+    assert body["yolo"] is None
+
+
+def test_diagnoses_include_visuals_true_still_default(api_client, leaf_image):
+    """include_visuals 쿼리를 생략하면 기존(True) 동작 그대로 — 하위 호환."""
+    r = _post_image(api_client, leaf_image)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["cam_png_base64"] is not None
+    assert body["yolo"] is not None
+
+
+def test_diagnoses_include_visuals_false_still_blocks_gates(api_client, ood_image):
+    """include_visuals=False여도 OOD/부위 게이트는 그대로 적용된다(시각화만 생략)."""
+    r = _post_image(api_client, ood_image, params={"include_visuals": False})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ood_blocked"] is True
 
 
 def test_diagnoses_blocks_ood(api_client, ood_image):
@@ -46,6 +81,11 @@ def test_diagnoses_blocks_ood(api_client, ood_image):
     assert body["label"] is None
     assert body["cam_png_base64"] is None
     assert body["yolo"] is None
+    # code-reviewer P2-2 — plant_score를 실어 보내야 클라이언트가 in-process와 동일한
+    # 퍼센트 포함 안내 문구를 만들 수 있다.
+    assert body["plant_score"] is not None
+    assert 0.0 <= body["plant_score"] < 1.0
+    assert body["part_prob"] is None  # OOD 게이트에서 막혔으므로 부위 게이트는 아직 안 돌았음
 
 
 def test_diagnoses_blocks_nonleaf_part(api_client, nonleaf_image):
@@ -56,6 +96,10 @@ def test_diagnoses_blocks_nonleaf_part(api_client, nonleaf_image):
     assert body["part"] != "leaf"
     assert body["reason"]
     assert body["label"] is None
+    # code-reviewer P2-2
+    assert body["plant_score"] is not None
+    assert body["part_prob"] is not None
+    assert 0.0 <= body["part_prob"] <= 1.0
 
 
 def test_diagnoses_empty_file_is_400(api_client):

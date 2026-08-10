@@ -1,6 +1,7 @@
 """app/api_client.py — Streamlit ↔ FastAPI 서빙 API 클라이언트 단위 테스트(이슈 #59 PR 3).
 
-requests 모킹만 사용(실 서버 기동 없음) — 성공·타임아웃·5xx·429·400·base64 복원을 검증한다.
+requests 모킹만 사용(실 서버 기동 없음) — 성공·타임아웃·5xx·429·400·422·base64 복원을 검증한다.
+5xx(서버 내부 오류)와 연결 자체 실패(ConnectionError/Timeout)는 문구가 다르다(P3-2).
 """
 import base64
 import io
@@ -74,9 +75,18 @@ def test_diagnose_remote_success(monkeypatch):
         r = diagnose_remote(b"fake-bytes", conf=0.4, filename="leaf.jpg")
     assert r == body
     assert m.call_args.args[0] == "http://127.0.0.1:8000/api/diagnoses"
-    assert m.call_args.kwargs["params"] == {"conf": 0.4}
+    assert m.call_args.kwargs["params"] == {"conf": 0.4, "include_visuals": True}
     assert m.call_args.kwargs["files"]["file"][0] == "leaf.jpg"
     assert m.call_args.kwargs["timeout"] == 30
+
+
+def test_diagnose_remote_include_visuals_false_forwarded(monkeypatch):
+    """P2-1 — 처방 뷰가 텍스트 전용 호출 시 include_visuals=False를 쿼리로 넘기는지."""
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    body = _diagnosis_response()
+    with patch("requests.post", return_value=MagicMock(status_code=200, json=lambda: body)) as m:
+        diagnose_remote(b"fake-bytes", include_visuals=False)
+    assert m.call_args.kwargs["params"]["include_visuals"] is False
 
 
 def test_diagnose_remote_timeout_raises_connection_failed(monkeypatch):
@@ -93,11 +103,14 @@ def test_diagnose_remote_connection_error_raises_connection_failed(monkeypatch):
             diagnose_remote(b"fake-bytes")
 
 
-def test_diagnose_remote_5xx_raises_connection_failed(monkeypatch):
+def test_diagnose_remote_5xx_raises_server_error_message(monkeypatch):
+    """P3-2 — 5xx(응답은 받았고 서버 내부에서 실패)와 연결 자체 실패는 문구가 달라야 한다."""
     monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
     with patch("requests.post", return_value=MagicMock(status_code=500, json=lambda: {"detail": "boom"})):
-        with pytest.raises(ApiClientError, match="서빙 API 연결 실패"):
+        with pytest.raises(ApiClientError, match="서버 내부 오류") as exc_info:
             diagnose_remote(b"fake-bytes")
+    assert exc_info.value.status_code == 500
+    assert "연결 실패" not in str(exc_info.value)
 
 
 def test_diagnose_remote_429_raises_congestion_message(monkeypatch):
@@ -121,6 +134,34 @@ def test_diagnose_remote_413_uses_server_detail(monkeypatch):
         with pytest.raises(ApiClientError, match="10MB 초과") as exc_info:
             diagnose_remote(b"fake-bytes")
     assert exc_info.value.status_code == 413
+
+
+def test_diagnose_remote_422_with_string_detail_uses_server_detail(monkeypatch):
+    """P3-1 — detail이 문자열(ApiError 경로)이면 400/413과 같은 패턴으로 서버 문구를 쓴다."""
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    with patch("requests.post", return_value=MagicMock(status_code=422, json=lambda: {"detail": "잘못된 요청"})):
+        with pytest.raises(ApiClientError, match="잘못된 요청") as exc_info:
+            diagnose_remote(b"fake-bytes")
+    assert exc_info.value.status_code == 422
+
+
+def test_diagnose_remote_422_with_list_detail_uses_fixed_message(monkeypatch):
+    """P3-1 — detail이 리스트(FastAPI 자동 검증)면 서버 내부 상세를 그대로 노출하지 않고
+    고정 문구로 폴백한다."""
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    body = {"detail": [{"type": "missing", "loc": ["body", "file"], "msg": "Field required"}]}
+    with patch("requests.post", return_value=MagicMock(status_code=422, json=lambda: body)):
+        with pytest.raises(ApiClientError, match="요청 형식이 올바르지 않아요") as exc_info:
+            diagnose_remote(b"fake-bytes")
+    assert exc_info.value.status_code == 422
+
+
+def test_diagnose_remote_unexpected_status_falls_back_to_connection_failed(monkeypatch):
+    """정의되지 않은 코드(예: 404)는 기존처럼 일반 연결 실패 문구로 폴백."""
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    with patch("requests.post", return_value=MagicMock(status_code=404, json=lambda: {"detail": "not found"})):
+        with pytest.raises(ApiClientError, match="서빙 API 연결 실패"):
+            diagnose_remote(b"fake-bytes")
 
 
 def test_diagnose_remote_ood_blocked_passthrough(monkeypatch):

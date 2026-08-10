@@ -24,10 +24,16 @@ def _png_base64(color):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _fake_diagnosis_response(ood_blocked=False):
+def _fake_diagnosis_response(ood_blocked=False, part_blocked=False):
     if ood_blocked:
         return {"ood_blocked": True, "reason": "식물·잎으로 보이지 않는 사진(OOD)", "label": None,
                 "label_kr": None, "prob": None, "probs": None, "part": None,
+                "plant_score": 0.012, "part_prob": None,
+                "cam_png_base64": None, "yolo": None}
+    if part_blocked:
+        return {"ood_blocked": True, "reason": "잎이 아닌 부위로 판정(과실)", "label": None,
+                "label_kr": None, "prob": None, "probs": None, "part": "fruit",
+                "plant_score": 0.5, "part_prob": 0.87,
                 "cam_png_base64": None, "yolo": None}
     return {
         "ood_blocked": False,
@@ -37,6 +43,8 @@ def _fake_diagnosis_response(ood_blocked=False):
         "prob": 0.91,
         "probs": {"late_blight": 0.02, "leaf_mold": 0.91, "normal": 0.05, "tylcv": 0.02},
         "part": "leaf",
+        "plant_score": None,
+        "part_prob": None,
         "cam_png_base64": _png_base64((255, 0, 0)),
         "yolo": {"annotated_png_base64": _png_base64((0, 255, 0)),
                  "boxes": [{"label": "leaf_mold", "conf": 0.83}]},
@@ -103,8 +111,11 @@ def test_diagnosis_page_api_mode_yolo_sample_click_renders_without_exception(_ap
     assert "77" in body  # detect_remote 몽키패치의 conf=0.77 이 신뢰도 문자열로 보여야 함
 
 
-def test_diagnosis_page_api_mode_ood_blocked_shows_error(monkeypatch, _api_mode):
-    """게이트 차단 응답이면 st.error로 사유가 표시되고 예외는 없어야 한다."""
+def test_diagnosis_page_api_mode_ood_blocked_shows_unified_message(monkeypatch, _api_mode):
+    """OOD 차단 응답 → in-process와 동일한 템플릿(퍼센트 포함)의 안내 문구가 떠야 한다(P2-2).
+
+    plant_score=0.012 → "잎·식물 신호 1.2%"로 in-process `_ood_blocked_message()`와 같은
+    포맷이어야 한다(문구 함수 공용화 검증)."""
     import api_client
 
     monkeypatch.setattr(api_client, "diagnose_remote",
@@ -122,4 +133,32 @@ def test_diagnosis_page_api_mode_ood_blocked_shows_error(monkeypatch, _api_mode)
 
     assert not at.exception
     errors = " ".join(e.value for e in at.error)
-    assert "OOD" in errors or "보이지 않는" in errors
+    assert "토마토 잎으로 보이지 않아요" in errors
+    assert "1.2%" in errors  # plant_score=0.012 → {score:.1%}
+    assert "잎이 화면에 크게 보이도록 촬영해 업로드하세요" in errors
+
+
+def test_diagnosis_page_api_mode_part_blocked_shows_unified_message(monkeypatch, _api_mode):
+    """부위 게이트 차단 응답 → in-process `_part_blocked_message()`와 동일한 문구여야 한다(P2-2).
+
+    part=fruit·part_prob=0.87 → "과실(열매)...부위 신뢰도 87%" + 범위 안내 문구까지 포함."""
+    import api_client
+
+    monkeypatch.setattr(api_client, "diagnose_remote",
+                         lambda image_bytes, conf=0.25, filename="image.jpg": _fake_diagnosis_response(
+                             part_blocked=True))
+
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(DIAGNOSIS_PAGE))
+    at.run(timeout=30)
+    assert not at.exception
+
+    buttons = [b for b in at.button if b.key == "samp_leaf_mold"]
+    buttons[0].click().run(timeout=30)
+
+    assert not at.exception
+    errors = " ".join(e.value for e in at.error)
+    assert "과실(열매)" in errors
+    assert "87%" in errors  # part_prob=0.87 → {part_prob:.0%}
+    assert "과실·꽃·줄기 병해는 현재 진단 범위가 아닙니다" in errors
