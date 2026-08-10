@@ -148,6 +148,76 @@ RAG 코퍼스 적재(`python -m llm.rag.sync`)가 자동 실행된다(실패해�
 
 ---
 
+## 9. 서빙 API (이슈 #59) — FastAPI 모델 서빙, port 8000
+
+Phase 1/2/3 모델을 Streamlit 프로세스 밖에서 서빙하는 `api/`(FastAPI) 배포 절차. Streamlit은
+`SMARTFARM_API_URL` 설정 시 이 API를 경유하고, 미설정이면 기존처럼 in-process로 동작(폴백).
+
+> ⚠️ 실제 운영 서버는 **nginx**(공용 리버스프록시, `/etc/nginx/conf.d/smartfarm-ai.conf`)를 쓴다.
+> 이 문서 6번의 Caddy 절차는 참고용/단일 앱 전제 가이드이고, 이 서버는 nginx에 블록을 추가하는
+> 방식이므로 아래는 nginx 기준으로 작성했다(레포의 `deploy/Caddyfile`은 수정하지 않는다).
+
+### ① 의존성 설치
+```bash
+cd /opt/smartfarm_ai   # 실 운영 경로
+uv pip install -r requirements-deploy.txt   # fastapi/uvicorn/python-multipart 포함(PR 4)
+```
+
+### ② 서비스 파일 scp·enable·start
+```bash
+# 로컬(맥)에서: 서비스 파일을 서버로 전송
+scp deploy/smartfarm-api.service <host>:/tmp/smartfarm-api.service
+
+# 서버에서
+sudo mv /tmp/smartfarm-api.service /etc/systemd/system/smartfarm-api.service
+sudo restorecon -RF /etc/systemd/system/smartfarm-api.service   # SELinux 라벨(Oracle Linux)
+sudo systemctl daemon-reload
+sudo systemctl enable --now smartfarm-api
+systemctl status smartfarm-api --no-pager      # active (running) 확인
+curl -s http://127.0.0.1:8000/api/health        # {"status":"ok",...} 확인
+```
+
+### ③ nginx `/api/*` 프록시 블록 추가
+기존 `/etc/nginx/conf.d/smartfarm-ai.conf`의 `server { ... }` 블록 **안**, 기존 `location /`
+**보다 위**에 추가(더 구체적인 경로가 먼저 매칭돼야 함):
+```nginx
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 10m;    # security 리뷰 이월 P2 — 수신 단계 1차 방어(필수)
+        proxy_read_timeout 300;      # /api/prescriptions LLM 처방 대기시간 감안
+    }
+```
+nginx는 공용(다른 앱들도 의존)이라 반드시 문법 검증 후 reload:
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### ④ 서버 `.env` 설정 (수동 1회 — deploy.sh는 `.env`를 건드리지 않는 현행 원칙 유지)
+```
+SMARTFARM_API_URL=http://127.0.0.1:8000
+# 선택: LLM 처방 타임아웃(기본 180s) — 서버 사양에 맞게 조정 시만
+# OLLAMA_TIMEOUT=180
+```
+> ⚠️ `.env` 변경은 **프로세스 재시작 후에만 반영**(`sudo systemctl restart smartfarm-ai`) — Streamlit이
+> 이 값을 읽어야 API 경유 모드로 전환된다.
+
+### ⑤ 검증
+```bash
+curl -s http://127.0.0.1:8000/api/health
+curl -s https://<도메인>/api/health
+curl -o /dev/null -s -w '%{http_code}\n' -X POST https://<도메인>/api/diagnoses \
+     -F "image=@/path/to/tomato_leaf.jpg"   # 200 또는 422(샘플 이미지 없으면) 확인
+```
+이후 Streamlit UI(진단/처방 탭)에서 정상 동작 확인 — `SMARTFARM_API_URL` 설정 후에는
+in-process 폴백 없이 이 API를 경유한다(app/views/diagnosis.py·prescribe.py).
+
+---
+
 ## 트러블슈팅
 > 아래는 운영 중 빠른 대응 FAQ. **배포 당시 실제 겪은 문제 전체 기록은 [트러블슈팅 내역](../docs/troubleshooting/troubleshooting.md) §C 참고.**
 
