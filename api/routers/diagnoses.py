@@ -47,9 +47,9 @@ def create_diagnosis(
     file: UploadFile = File(...),
     conf: float = Query(0.25, ge=0.0, le=1.0, description="YOLO 검출 신뢰도 임계값"),
 ) -> DiagnosisResponse:
-    pil = load_pil(file)  # 크기 캡(413)·픽셀 폭탄(400)·디코드 실패(400) 모두 여기서 처리
+    with inference_slot():  # 서버 혼잡 시 429(P2-2) — 디코드도 CPU·메모리를 쓰므로 슬롯 안에서
+        pil = load_pil(file)  # 크기 캡(413)·픽셀 폭탄(400)·디코드 실패(400) 모두 여기서 처리
 
-    with inference_slot():  # 서버 혼잡 시 429(P2-2) — 이 블록 안만 추론 슬롯을 점유
         # ① OOD 게이트 — 식물/잎이 아니면 차단
         score = infer.ood_plant_score(pil)
         if score < infer.PLANT_THRESHOLD:

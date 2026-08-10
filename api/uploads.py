@@ -19,6 +19,8 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # Pillow 기본 Image.MAX_IMAGE_PIXELS(~89.5M)는 경고(DecompressionBombWarning)만 하고 통과시켜
 # "압축은 작지만 디코드하면 거대한" 픽셀 폭탄 방어로는 불충분 — 이 서비스가 다루는 잎 사진
 # 해상도(수백만~수천만 px)를 넉넉히 넘는 2500만 px을 명시 상한으로 둔다.
+# 트레이드오프: 48MP급 폰 원본(약 8064×6048≈48.7M px)은 여기 걸리지만, 그런 파일은 대부분
+# MAX_UPLOAD_BYTES(10MB)에 먼저 걸린다 — 데모 대상(잎 접사)에선 실익 대비 상한을 낮게 유지한다.
 MAX_IMAGE_PIXELS = 25_000_000
 
 

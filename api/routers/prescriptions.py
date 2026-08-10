@@ -66,10 +66,11 @@ def create_prescription(
     file: UploadFile | None = File(None),
 ) -> Prescription:
     diag = _parse_diagnosis(diagnosis)
-    image_path = _save_upload_to_tempfile(file)
+    image_path: str | None = None
 
     try:
-        with inference_slot():  # 서버 혼잡 시 429(P2-2)
+        with inference_slot():  # 서버 혼잡 시 429(P2-2) — 디코드·검증도 CPU를 쓰므로 슬롯 안에서
+            image_path = _save_upload_to_tempfile(file)
             return prescribe_fast(question, image_path=image_path, diag=diag)
     finally:
         if image_path:
