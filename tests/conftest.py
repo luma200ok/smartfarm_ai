@@ -7,6 +7,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))  # `import api`(이슈 #59 PR 2, FastAPI 서빙) 용 — tests/ 는 패키지가 아니라 pytest가 루트를 자동으로 넣어주지 않음
+sys.path.insert(0, str(ROOT / "app"))  # `import api_client`(이슈 #59 PR 3, Streamlit API 클라이언트) 용
 
 _IMG_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
