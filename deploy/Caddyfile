@@ -1,3 +1,6 @@
+# ⚠️ 미사용 — 실제 운영 서버는 nginx(공용 리버스프록시)를 쓴다. 이 파일은 참고용 잔재이니 수정하지 말 것.
+# 실제 nginx 설정 절차·서빙 API(/api/*) 프록시 블록은 deploy/deploy_oci.md 참조.
+#
 # SmartFarm AI — Caddy 리버스 프록시 (자동 HTTPS)
 # <도메인> 을 실제 도메인으로 치환. Caddy 가 80/443 종료 + Let's Encrypt 자동 발급/갱신.
 # Streamlit 의 websocket 도 reverse_proxy 가 자동 처리.
