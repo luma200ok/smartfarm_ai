@@ -137,7 +137,10 @@ def render():
             else:
                 with st.status("🔬 잎 진단 실행 중…", expanded=True) as status:
                     try:
-                        diag_resp = diagnose_remote(image_bytes, filename=filename)
+                        # include_visuals=False — 이 페이지는 Grad-CAM·YOLO를 렌더하지 않으므로
+                        # 서버가 그 계산을 생략하게 한다(P2-1). in-process도 tools.get_diagnosis()가
+                        # infer.diagnose()(순전파만)를 쓰므로 의미는 동일하다.
+                        diag_resp = diagnose_remote(image_bytes, filename=filename, include_visuals=False)
                     except ApiClientError as e:
                         status.update(label="⚠️ 진단 실패", state="error")
                         st.error(str(e))
