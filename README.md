@@ -159,7 +159,8 @@ streamlit run app/streamlit_app.py   # 통합 데모(농장 대시보드 + 서�
 uvicorn api.main:app --port 8000     # 모델 서빙 API (진단·처방) — workers=1 전제(모델 메모리 공유)
 ```
 
-- **서빙 API**(이슈 #59): `GET /api/health` · `POST /api/diagnoses`(이미지 → 게이트→CNN Grad-CAM+YOLO) · `POST /api/prescriptions`(질문+선택 이미지/진단 재사용 → LLM 처방). 업로드 10MB·25M px 상한, 동시 추론 2건 초과 시 429. env: `OLLAMA_TIMEOUT`(기본 180s)
+- **서빙 API**(이슈 #59): `GET /api/health` · `POST /api/diagnoses`(이미지 → 게이트→CNN Grad-CAM+YOLO, `?include_visuals=false`로 경량 분류만) · `POST /api/detections`(YOLO 전용, 게이트 없음) · `POST /api/prescriptions`(질문+선택 이미지/진단 재사용 → LLM 처방). 업로드 10MB·25M px 상한, 동시 추론 2건 초과 시 429. env: `OLLAMA_TIMEOUT`(기본 180s)
+- **Streamlit ↔ API**: `SMARTFARM_API_URL` 설정 시 진단·처방 뷰가 서빙 API 경유(클라이언트에 모델 파일 불필요), 미설정 시 in-process 단독 실행
 
 </details>
 

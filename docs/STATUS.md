@@ -1,6 +1,6 @@
 # 📊 SmartFarm AI — 진행 현황 (STATUS)
 
-> 마지막 갱신: **2026-08-10(FastAPI 서빙 API 신설 PR #61 — 이슈 #59 PR 2/4, `/api/health·diagnoses·prescriptions` + 보안 하드닝)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
+> 마지막 갱신: **2026-08-10(Streamlit 진단·처방 뷰 API 경유 전환 PR #62 — 이슈 #59 PR 3/4, `SMARTFARM_API_URL`+`/api/detections`)** · 레포 [github.com/luma200ok/smartfarm_ai](https://github.com/luma200ok/smartfarm_ai) (branch `main`)
 > 새 세션은 이 문서 + [README](../README.md) + [roadmap](roadmap.md)로 현황 파악.
 
 ## 🟢 전체 상태: Phase 1·2·3 완료 (ML → DL → LSTM → LLM + 알림)
@@ -64,7 +64,7 @@
 - [x] **진단 병해 클래스 확장 1차**(전이학습): 잎마름역병(late_blight) 추가 → **4분류**(PV 898/100장 혼합, resnet18 acc 0.96·late_blight f1 0.95) + RAG 코퍼스 `late_blight.md`. (PR #3)
 - [x] **진단 추론 로직 src 흡수**(이슈 #59 PR 1/4): FastAPI 서빙 분리 선행 부채 — diagnosis 뷰의 복제 추론(Grad-CAM·YOLO·OOD/부위 게이트)을 `src/dl/infer.py`로 통합(`predict_with_cam`·`detect_annotated`·공용 `_yolo_predict`), 뷰는 thin wrapper화. 공유 모델 backward 구간 `_cam_lock` 직렬화(FastAPI threadpool 대비)+동시성 테스트. 결과 동일성 라인 대조·실측 검증, 354 PASS (PR #60)
 ### 🔥 활성
-- [ ] **FastAPI 모델 서빙 API 분리**(이슈 #59, 진행 중 — PR 1 ✅ #60 · PR 2 ✅ #61): PR 2에서 `api/` 신설(`/api/health`·`/api/diagnoses`·`/api/prescriptions`, 동기 def+threadpool, uvicorn workers=1) + 보안 하드닝(10MB 캡·25M px·세마포어 2→429·`DiagnosisIn` 화이트리스트·`OLLAMA_TIMEOUT` 180s). 남은 것: PR 3 Streamlit `SMARTFARM_API_URL` 경유 전환(미설정 시 in-process 폴백, handoff `app-next.md`) → PR 4 배포(`smartfarm-api.service`+Caddy `/api/*`+**`request_body max_size 10MB` 의무**+deploy.sh). 관제/대시보드/forecast API화는 범위 제외(스테이트풀·실익 낮음)
+- [ ] **FastAPI 모델 서빙 API 분리**(이슈 #59, 진행 중 — PR 1 ✅ #60 · PR 2 ✅ #61 · PR 3 ✅ #62): `api/`(health·diagnoses(+`include_visuals`)·detections·prescriptions, 하드닝: 10MB·25M px·세마포어 2→429·`OLLAMA_TIMEOUT` 180s) + Streamlit `SMARTFARM_API_URL` 경유(미설정 시 in-process 폴백 — **서버는 아직 미설정이라 운영 불변**). 남은 것: **PR 4 배포**(`smartfarm-api.service`+Caddy `/api/*`+**`request_body max_size 10MB` 의무**+deploy.sh+서버 `.env`에 `SMARTFARM_API_URL` — handoff `deploy-next.md`). 관제/대시보드/forecast API화는 범위 제외(스테이트풀·실익 낮음)
 - [x] **NCPMS OpenAPI 로더**(이슈 #42 클로즈): 병해 코퍼스를 NCPMS 실데이터로 생성(`nongsaro_loader.py`, stdlib만·의존성0, SVC01 검색→SVC05 상세, sickKey 하드코딩, `<br/>`정리·캐시). leaf_mold(D00001533)·late_blight(D00001550) 교체 — 발병 최적온·습도 등 구체 수치로 수기본 대비 정확도↑ (PR #43). 조사 결론: **농사로 미채택**(토마토 재배환경 지식 API 부재, 게시판글·시설평가 설문뿐) · **tylcv 제외**(NCPMS 바이러스 레코드 빈약=발생환경·증상 없음→수기 유지) · **tomato_general 유지**. NCPMS=KOGL 2유형(출처표시·비상업). 후속(리뷰 P3): 단일 레코드 전제 주석·build 예외 래핑
 - [ ] **대화형 Q&A 디스코드 봇**(검토 중): pipeline Q&A 경로를 봇으로 노출(Webhook과 별개) — CPU 서버 응답 지연(agentic 경로 수십 초) 감안해 설계 필요
 
