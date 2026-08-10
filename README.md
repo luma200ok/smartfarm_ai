@@ -129,6 +129,7 @@ smartfarm-ai/
 ├── src/llm/       prescribe · pipeline · rag/ · tools · weather · monitor · notify  (Phase 3 — 처방·RAG·알림)
 ├── src/control/   controller · actuators · setpoints · live               (Phase 3 — 규칙 기반 환경 관제)
 ├── src/sim/       가상 센서 스트림 (오늘 운영·리플레이)
+├── api/           FastAPI 모델 서빙 (health·diagnoses·prescriptions — 업로드 캡·동시성 캡 내장)
 ├── app/           streamlit_app.py + views/(dashboard·diagnosis·prescribe·monitor·crops·about·ml_eval·dl_eval·llm_eval)  (Streamlit 멀티페이지, OCI 배포)
 ├── data/          데이터 (git 제외 — 포털에서 재다운)
 ├── models/        학습 모델 (.pt·.pkl — git 제외, rsync 배포)
@@ -155,7 +156,10 @@ uv venv && uv pip install -r requirements.txt
 python src/ml/preprocess.py    # 환경 데이터 → 일별 집계
 python src/ml/train.py         # ML 모델 학습·평가·저장
 streamlit run app/streamlit_app.py   # 통합 데모(농장 대시보드 + 서비스 5종 + 프로젝트 기록 3종)
+uvicorn api.main:app --port 8000     # 모델 서빙 API (진단·처방) — workers=1 전제(모델 메모리 공유)
 ```
+
+- **서빙 API**(이슈 #59): `GET /api/health` · `POST /api/diagnoses`(이미지 → 게이트→CNN Grad-CAM+YOLO) · `POST /api/prescriptions`(질문+선택 이미지/진단 재사용 → LLM 처방). 업로드 10MB·25M px 상한, 동시 추론 2건 초과 시 429. env: `OLLAMA_TIMEOUT`(기본 180s)
 
 </details>
 
