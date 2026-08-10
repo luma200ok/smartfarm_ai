@@ -39,7 +39,10 @@ echo "▶ [6/7] 서비스 재시작 — smartfarm-api(FastAPI 서빙, 이슈 #59
 # 그래서 여기서는 플래그만 남기고 계속 진행 → [7/7]에서 smartfarm-ai는 항상 검증하고,
 # API_INSTALLED=0 이면 최종 결과는 그대로 실패 처리(설치 강제 의도는 보존).
 API_INSTALLED=1
-if systemctl list-unit-files | grep -q '^smartfarm-api\.service'; then
+# ※ `systemctl list-unit-files | grep -q`는 set -o pipefail 하에서 grep 조기 종료 → systemctl SIGPIPE(141)로
+#    파이프라인이 비0이 되는 레이스가 있어(서버 실측 30/30 재현) 설치돼 있어도 미설치로 오판한다.
+#    파이프 없는 systemctl cat(무권한 동작 확인)으로 존재 판정.
+if systemctl cat smartfarm-api.service >/dev/null 2>&1; then
   sudo systemctl restart smartfarm-api
 else
   API_INSTALLED=0
