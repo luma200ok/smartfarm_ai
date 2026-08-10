@@ -21,6 +21,10 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
+if str(ROOT / "app") not in sys.path:
+    sys.path.insert(0, str(ROOT / "app"))
+
+from api_client import api_base  # noqa: E402 — 위 sys.path 삽입 이후에 임포트해야 함
 
 CKPT = ROOT / "models" / "tomato_resnet18.pt"
 YOLO_CKPT = ROOT / "models" / "tomato_yolov8n.pt"
@@ -53,6 +57,80 @@ def overlay(img, cam):
     return (0.55 * img + 0.45 * heat).clip(0, 1)
 
 
+# ── API 모드 렌더(이슈 #59 PR 3) ─────────────────────────────────────────
+# SMARTFARM_API_URL 설정 시 in-process 추론(infer.*) 대신 /api/diagnoses 를 호출해
+# 같은 화면을 그린다. in-process 경로(render() 안의 기존 if/elif/else)는 그대로 둔다.
+def _render_diagnosis_api(pil, image_bytes):
+    """탭1(진단): /api/diagnoses 1회 호출 → cam_png_base64 를 그대로 디코드해 표시.
+
+    서버가 이미 Grad-CAM을 원본에 블렌딩해 보내므로(``_overlay_png_base64``), 로컬 ``overlay()``는
+    호출하지 않는다. 응답의 ``yolo`` 필드는 이 탭에선 쓰지 않는다(탭2 전용).
+    """
+    from api_client import ApiClientError, decode_png_base64, diagnose_remote
+
+    try:
+        resp = diagnose_remote(image_bytes, conf=0.25)
+    except ApiClientError as e:
+        pcol, _ = st.columns([1, 2])
+        pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+        st.error(str(e))
+        return
+
+    if resp["ood_blocked"]:
+        pcol, _ = st.columns([1, 2])
+        pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+        st.error(f"🚫 {resp.get('reason') or '이 사진은 진단할 수 없어요.'}")
+        return
+
+    from dl import infer
+
+    label, prob = resp["label"], resp["prob"]
+    st.subheader(f"진단: {resp['label_kr']}  (확률 {prob:.1%})")
+    icol, gcol = st.columns(2)
+    icol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+    gcol.image(decode_png_base64(resp["cam_png_base64"]),
+               caption="Grad-CAM — 판단 근거(붉을수록 주목한 영역)", use_container_width=True)
+    if label != "normal":
+        st.warning(f"{resp['label_kr']}이(가) 의심돼요. 위 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
+    else:
+        st.success("정상으로 판단돼요.")
+
+    st.markdown("**클래스별 확률**")
+    probs_by_label = resp["probs"] or {}
+    st.bar_chart({LABEL_KR[c]: float(probs_by_label[c]) for c in infer.CLASSES if c in probs_by_label})
+    st.caption("Grad-CAM은 보조 지표예요 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요해요.")
+
+
+def _render_detect_api(pil2, image_bytes, conf):
+    """탭2(YOLO 검출): /api/diagnoses(진단+검출 결합 응답)에서 ``yolo`` 부분만 써서 렌더.
+
+    확정 API 계약엔 검출 전용 엔드포인트가 없어(진단·검출이 한 응답) 이 탭도 같은 엔드포인트를
+    쓴다 — OOD/부위 게이트에 걸리면(in-process 탭2엔 없던 게이트) 검출 결과 없이 사유만 안내한다.
+    """
+    from api_client import ApiClientError, decode_png_base64, diagnose_remote
+
+    try:
+        resp = diagnose_remote(image_bytes, conf=conf)
+    except ApiClientError as e:
+        st.error(str(e))
+        return
+
+    if resp["ood_blocked"] or not resp.get("yolo"):
+        st.info(f"검출 결과가 없어요 — {resp.get('reason') or '게이트에서 차단됐어요.'}")
+        return
+
+    yolo = resp["yolo"]
+    dets = [(b["label"], b["conf"]) for b in yolo["boxes"]]
+    st.image(decode_png_base64(yolo["annotated_png_base64"]),
+              caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도", use_container_width=True)
+    if dets:
+        st.subheader(f"검출 {len(dets)}건")
+        for lab, c in dets:
+            st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
+    else:
+        st.info("임계값 이상으로 검출된 잎이 없어요. conf 슬라이더를 낮춰 보세요.")
+
+
 # ── 페이지 렌더 (멀티페이지 엔트리가 호출) ───────────────────────────────────
 def render():
     from dl import infer
@@ -64,12 +142,14 @@ def render():
 
     # ── 탭 1: 분류 진단 + Grad-CAM ──
     with tab_diag:
-        if not CKPT.exists():
+        api = api_base()  # 설정돼 있으면 로컬 모델·체크포인트 유무와 무관하게 API 모드로 렌더
+        if not api and not CKPT.exists():
             st.error(f"진단 모델이 없습니다: {CKPT}\n\n터미널에서 먼저 실행하세요:\n"
                      "1) `python src/dl/prepare_tomato.py`\n"
                      "2) `python src/dl/02_core.py --chunk 2-5`")
         else:
-            _load_model()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
+            if not api:
+                _load_model()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
             st.caption("이 모델은 토마토 잎 사진 전용이에요. "
                        "업로드하면 먼저 잎/비잎을 판별해, 잎이 아닌 이미지는 진단하지 않아요.")
             up = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="diag")
@@ -82,48 +162,56 @@ def render():
             if up:
                 st.session_state.pop("diag_sample", None)
                 pil = Image.open(up)
+                image_bytes = up.getvalue()
             elif st.session_state.get("diag_sample"):
-                pil = Image.open(SAMPLE_DIR / f"{st.session_state['diag_sample']}.jpg")
+                sample_path = SAMPLE_DIR / f"{st.session_state['diag_sample']}.jpg"
+                pil = Image.open(sample_path)
+                image_bytes = sample_path.read_bytes()
             else:
                 pil = None
+                image_bytes = None
 
             if pil is not None:
                 st.divider()
-                # OOD 게이트: ImageNet 식물 판별기로 잎/비잎을 먼저 거름(임계값 미만이면 진단 차단)
-                score = infer.ood_plant_score(pil)
-                if score < infer.PLANT_THRESHOLD:
-                    pcol, _ = st.columns([1, 2])
-                    pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-                    st.error(
-                        f"토마토 잎으로 보이지 않아요(잎·식물 신호 {score:.1%}). 진단을 진행하지 않아요.\n\n"
-                        "이 진단기는 토마토 잎 전용이에요. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
-                    )
-                elif (part := infer.part_of(pil))[0] != "leaf":
-                    # 식물이지만 잎이 아닌 부위(과실·꽃·줄기) → 잎 진단 차단(과육 오분류 방지)
-                    pcol, _ = st.columns([1, 2])
-                    pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-                    st.error(
-                        f"🚫 이 사진은 **{PART_KR[part[0]]}**(으)로 보입니다(부위 신뢰도 {part[1]:.0%}). "
-                        "이 진단기는 **토마토 잎 전용**입니다 — 잎이 화면에 크게 보이도록 촬영해 업로드하세요.\n\n"
-                        "※ 과실·꽃·줄기 병해는 현재 진단 범위가 아닙니다(학습 데이터가 잎 병해뿐)."
-                    )
+                if api:
+                    # API 모드(SMARTFARM_API_URL 설정) — /api/diagnoses 경유, in-process 폴백 안 함
+                    _render_diagnosis_api(pil, image_bytes)
                 else:
-                    label, prob, probs, cam, img = infer.predict_with_cam(pil)
-
-                    st.subheader(f"진단: {LABEL_KR[label]}  (확률 {prob:.1%})")
-                    # 분석한 사진 + 판단 근거(Grad-CAM)를 같은 라인에 나란히 배치
-                    icol, gcol = st.columns(2)
-                    icol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-                    gcol.image(overlay(img, cam), caption="Grad-CAM — 판단 근거(붉을수록 주목한 영역)",
-                               use_container_width=True)
-                    if label != "normal":
-                        st.warning(f"{LABEL_KR[label]}이(가) 의심돼요. 위 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
+                    # OOD 게이트: ImageNet 식물 판별기로 잎/비잎을 먼저 거름(임계값 미만이면 진단 차단)
+                    score = infer.ood_plant_score(pil)
+                    if score < infer.PLANT_THRESHOLD:
+                        pcol, _ = st.columns([1, 2])
+                        pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+                        st.error(
+                            f"토마토 잎으로 보이지 않아요(잎·식물 신호 {score:.1%}). 진단을 진행하지 않아요.\n\n"
+                            "이 진단기는 토마토 잎 전용이에요. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
+                        )
+                    elif (part := infer.part_of(pil))[0] != "leaf":
+                        # 식물이지만 잎이 아닌 부위(과실·꽃·줄기) → 잎 진단 차단(과육 오분류 방지)
+                        pcol, _ = st.columns([1, 2])
+                        pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+                        st.error(
+                            f"🚫 이 사진은 **{PART_KR[part[0]]}**(으)로 보입니다(부위 신뢰도 {part[1]:.0%}). "
+                            "이 진단기는 **토마토 잎 전용**입니다 — 잎이 화면에 크게 보이도록 촬영해 업로드하세요.\n\n"
+                            "※ 과실·꽃·줄기 병해는 현재 진단 범위가 아닙니다(학습 데이터가 잎 병해뿐)."
+                        )
                     else:
-                        st.success("정상으로 판단돼요.")
+                        label, prob, probs, cam, img = infer.predict_with_cam(pil)
 
-                    st.markdown("**클래스별 확률**")
-                    st.bar_chart({c: float(p) for c, p in zip([LABEL_KR[c] for c in infer.CLASSES], probs)})
-                    st.caption("Grad-CAM은 보조 지표예요 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요해요.")
+                        st.subheader(f"진단: {LABEL_KR[label]}  (확률 {prob:.1%})")
+                        # 분석한 사진 + 판단 근거(Grad-CAM)를 같은 라인에 나란히 배치
+                        icol, gcol = st.columns(2)
+                        icol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
+                        gcol.image(overlay(img, cam), caption="Grad-CAM — 판단 근거(붉을수록 주목한 영역)",
+                                   use_container_width=True)
+                        if label != "normal":
+                            st.warning(f"{LABEL_KR[label]}이(가) 의심돼요. 위 히트맵의 붉은 영역(병반 추정)을 확인하세요.")
+                        else:
+                            st.success("정상으로 판단돼요.")
+
+                        st.markdown("**클래스별 확률**")
+                        st.bar_chart({c: float(p) for c, p in zip([LABEL_KR[c] for c in infer.CLASSES], probs)})
+                        st.caption("Grad-CAM은 보조 지표예요 — 잎맥·배경 등 비병변 영역에 반응할 수 있어 사람 검수가 필요해요.")
             else:
                 st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 진단 결과와 Grad-CAM 히트맵을 볼 수 있어요.")
 
@@ -140,12 +228,14 @@ def render():
 
     # ── 탭 2: YOLO 위치 검출 ──
     with tab_detect:
-        if not YOLO_CKPT.exists():
+        api = api_base()  # 설정돼 있으면 로컬 모델·체크포인트 유무와 무관하게 API 모드로 렌더
+        if not api and not YOLO_CKPT.exists():
             st.error(f"검출 모델이 없습니다: {YOLO_CKPT}\n\n터미널에서 먼저 실행하세요:\n"
                      "1) `python src/dl/prepare_tomato_yolo.py`\n"
                      "2) `python src/dl/05_detect.py`")
         else:
-            _load_yolo()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
+            if not api:
+                _load_yolo()  # 최초 렌더 시 모델 로드를 스피너와 함께 선트리거(실제 캐시는 infer의 lru_cache)
             up2 = st.file_uploader("토마토 잎 사진 업로드", type=["jpg", "jpeg", "png"], key="detect")
             conf = st.slider("신뢰도 임계값(conf)", 0.05, 0.9, 0.25, 0.05)
 
@@ -157,22 +247,30 @@ def render():
             if up2:
                 st.session_state.pop("detect_sample", None)
                 pil2 = Image.open(up2)
+                image_bytes2 = up2.getvalue()
             elif st.session_state.get("detect_sample"):
-                pil2 = Image.open(SAMPLE_DIR / f"yolo_{st.session_state['detect_sample']}.jpg")
+                sample_path2 = SAMPLE_DIR / f"yolo_{st.session_state['detect_sample']}.jpg"
+                pil2 = Image.open(sample_path2)
+                image_bytes2 = sample_path2.read_bytes()
             else:
                 pil2 = None
+                image_bytes2 = None
 
             if pil2 is not None:
                 st.divider()
-                annotated, dets = infer.detect_annotated(pil2, conf=conf)
-                st.image(annotated, caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도",
-                         use_container_width=True)
-                if dets:
-                    st.subheader(f"검출 {len(dets)}건")
-                    for lab, c in dets:
-                        st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
+                if api:
+                    # API 모드(SMARTFARM_API_URL 설정) — /api/diagnoses 경유(yolo 필드만 사용), 폴백 안 함
+                    _render_detect_api(pil2, image_bytes2, conf)
                 else:
-                    st.info("임계값 이상으로 검출된 잎이 없어요. conf 슬라이더를 낮춰 보세요.")
+                    annotated, dets = infer.detect_annotated(pil2, conf=conf)
+                    st.image(annotated, caption="YOLO 검출 — 박스 위치 + 정상/질병 + 신뢰도",
+                             use_container_width=True)
+                    if dets:
+                        st.subheader(f"검출 {len(dets)}건")
+                        for lab, c in dets:
+                            st.write(f"- {LABEL_KR.get(lab, lab)} — 신뢰도 {c:.1%}")
+                    else:
+                        st.info("임계값 이상으로 검출된 잎이 없어요. conf 슬라이더를 낮춰 보세요.")
             else:
                 st.info("잎 사진을 업로드하거나 아래 예시 사진을 클릭하면 잎 위치 박스와 정상/질병 라벨을 볼 수 있어요.")
 
