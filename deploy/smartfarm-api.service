@@ -1,0 +1,26 @@
+[Unit]
+Description=SmartFarm AI FastAPI 서빙 API (모델 서빙, port 8000, 이슈 #59)
+# ⚠️ 유닛명은 반드시 smartfarm-api — 이 서버의 기존 smartfarm.service(Java)·smartfarm-ai.service(Streamlit)와
+# 충돌 금지(오라클 리눅스 운영 서버는 유닛명이 곧 .service 파일명이라 이름 중복 시 덮어씀).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opc
+WorkingDirectory=/opt/smartfarm_ai
+# workers=1 필수 — src/dl/infer.py 의 모델 캐시(@lru_cache)가 프로세스 단위(상세는 api/main.py 상단 주석).
+# 워커를 늘리면 resnet18·YOLO·부위 게이트 모델이 워커 수만큼 메모리에 중복 로드된다.
+Environment=OMP_NUM_THREADS=1
+# 외부 노출은 nginx(공용, 80/443)가 담당 → uvicorn 은 루프백에만 바인딩
+# ★ 바이너리(.venv/bin/uvicorn) 직접 exec 금지 → python -m uvicorn 으로 호출(smartfarm-ai.service와 동일 패턴)
+ExecStart=/opt/smartfarm_ai/.venv/bin/python -m uvicorn api.main:app \
+          --host 127.0.0.1 \
+          --port 8000 \
+          --workers 1
+Restart=on-failure
+RestartSec=5
+# 크래시 시 자동 복구(항상 재시작인 smartfarm-ai와 달리 정상 종료는 재시작 안 함). 로그는 journalctl -u smartfarm-api -f 로 확인
+
+[Install]
+WantedBy=multi-user.target
