@@ -36,7 +36,12 @@ class YoloResult(BaseModel):
 
 
 class DiagnosisResponse(BaseModel):
-    """게이트 차단 시(ood_blocked=True)에도 200 — label 이하 필드는 None(현행 뷰 동작과 동일 의미)."""
+    """게이트 차단 시(ood_blocked=True)에도 200 — label 이하 필드는 None(현행 뷰 동작과 동일 의미).
+
+    plant_score(OOD 게이트 점수)·part_prob(부위 게이트 확률)는 in-process(`tools.get_diagnosis`)
+    가 이미 차단 사유에 싣던 값을 API 응답에도 실어(code-reviewer P2-2), 클라이언트가 in-process
+    와 동일한 퍼센트 포함 안내 문구를 만들 수 있게 한다.
+    """
 
     ood_blocked: bool
     reason: str | None = None
@@ -45,6 +50,8 @@ class DiagnosisResponse(BaseModel):
     prob: float | None = None
     probs: dict[str, float] | None = None
     part: str | None = None
+    plant_score: float | None = None
+    part_prob: float | None = None
     cam_png_base64: str | None = None
     yolo: YoloResult | None = None
 
