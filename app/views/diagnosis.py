@@ -57,6 +57,25 @@ def overlay(img, cam):
     return (0.55 * img + 0.45 * heat).clip(0, 1)
 
 
+# ── 게이트 차단 안내 문구(code-reviewer P2-2 — in-process·API 두 분기 공용 템플릿) ─────────
+# 원래 in-process 분기(render() 안)에만 인라인으로 있던 문구를 그대로 추출한 것 — 출력이
+# 바뀌면 안 되므로 f-string 내용은 손대지 않는다. API 분기(_render_diagnosis_api)도 서버가
+# DiagnosisResponse.plant_score/part_prob로 실어 보내는 값을 그대로 여기 넣어 같은 문구를 낸다.
+def _ood_blocked_message(score: float) -> str:
+    return (
+        f"토마토 잎으로 보이지 않아요(잎·식물 신호 {score:.1%}). 진단을 진행하지 않아요.\n\n"
+        "이 진단기는 토마토 잎 전용이에요. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
+    )
+
+
+def _part_blocked_message(part_code: str, part_prob: float) -> str:
+    return (
+        f"🚫 이 사진은 **{PART_KR[part_code]}**(으)로 보입니다(부위 신뢰도 {part_prob:.0%}). "
+        "이 진단기는 **토마토 잎 전용**입니다 — 잎이 화면에 크게 보이도록 촬영해 업로드하세요.\n\n"
+        "※ 과실·꽃·줄기 병해는 현재 진단 범위가 아닙니다(학습 데이터가 잎 병해뿐)."
+    )
+
+
 # ── API 모드 렌더(이슈 #59 PR 3) ─────────────────────────────────────────
 # SMARTFARM_API_URL 설정 시 in-process 추론(infer.*) 대신 서빙 API를 호출해 같은 화면을
 # 그린다 — 탭1(진단+Grad-CAM)은 /api/diagnoses, 탭2(YOLO 검출·게이트 없음)는 /api/detections
@@ -81,7 +100,14 @@ def _render_diagnosis_api(pil, image_bytes):
     if resp["ood_blocked"]:
         pcol, _ = st.columns([1, 2])
         pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-        st.error(f"🚫 {resp.get('reason') or '이 사진은 진단할 수 없어요.'}")
+        part_code, part_prob, plant_score = resp.get("part"), resp.get("part_prob"), resp.get("plant_score")
+        if part_code and part_code != "leaf" and part_prob is not None:
+            st.error(_part_blocked_message(part_code, part_prob))
+        elif plant_score is not None:
+            st.error(_ood_blocked_message(plant_score))
+        else:
+            # 구버전 서버 응답 등 plant_score/part_prob가 없을 때만 폴백(서버 reason 그대로 노출)
+            st.error(f"🚫 {resp.get('reason') or '이 사진은 진단할 수 없어요.'}")
         return
 
     from dl import infer
@@ -180,19 +206,12 @@ def render():
                     if score < infer.PLANT_THRESHOLD:
                         pcol, _ = st.columns([1, 2])
                         pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-                        st.error(
-                            f"토마토 잎으로 보이지 않아요(잎·식물 신호 {score:.1%}). 진단을 진행하지 않아요.\n\n"
-                            "이 진단기는 토마토 잎 전용이에요. 잎이 화면에 크게 보이도록 촬영해 업로드하세요."
-                        )
+                        st.error(_ood_blocked_message(score))
                     elif (part := infer.part_of(pil))[0] != "leaf":
                         # 식물이지만 잎이 아닌 부위(과실·꽃·줄기) → 잎 진단 차단(과육 오분류 방지)
                         pcol, _ = st.columns([1, 2])
                         pcol.image(pil, caption="🔍 분석한 사진", use_container_width=True)
-                        st.error(
-                            f"🚫 이 사진은 **{PART_KR[part[0]]}**(으)로 보입니다(부위 신뢰도 {part[1]:.0%}). "
-                            "이 진단기는 **토마토 잎 전용**입니다 — 잎이 화면에 크게 보이도록 촬영해 업로드하세요.\n\n"
-                            "※ 과실·꽃·줄기 병해는 현재 진단 범위가 아닙니다(학습 데이터가 잎 병해뿐)."
-                        )
+                        st.error(_part_blocked_message(part[0], part[1]))
                     else:
                         label, prob, probs, cam, img = infer.predict_with_cam(pil)
 
