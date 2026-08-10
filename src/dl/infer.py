@@ -6,18 +6,27 @@ Phase 2 는 그대로 streamlit(@st.cache_resource)에 묶여 있어 src/llm 에
 LLM tool(src/llm/tools.py)이 import 할 수 있도록 동일 로직을 여기 모은다.
 모델 로드는 @lru_cache 로 프로세스 1회만(streamlit 캐시 대체).
 
+app/views/diagnosis.py(Streamlit 진단 페이지)도 이 모듈을 직접 호출한다(이슈 #59 —
+구 app/phase2_dl.py 잔재였던 뷰 쪽 중복 추론 구현을 폐기하고 여기로 흡수).
+predict_with_cam·detect_annotated 는 UI(Grad-CAM 히트맵·박스 오버레이) 전용 반환 형태이고,
+diagnose·detect 는 LLM 처방 도구(src/llm/tools.py)가 쓰는 요약 형태 — 둘 다 같은 모델·
+게이트(load_diagnosis_model/ood_plant_score/part_of)를 재사용해 두 화면의 판정이 갈리지 않는다.
+
 모델: models/tomato_resnet18.pt(진단) · tomato_part.pt(부위 게이트) · tomato_yolov8n.pt(검출)
 """
 import json
 import logging
+import threading
 from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 _log = logging.getLogger(__name__)
+_cam_lock = threading.Lock()   # predict_with_cam()의 공유 모델 backward 구간 직렬화용(아래 참조)
 
 ROOT = Path(__file__).resolve().parents[2]          # 배포 안전(절대경로 하드코딩 지양)
 MODELS = ROOT / "models"
@@ -75,6 +84,47 @@ def diagnose(pil):
         "prob": float(probs[cls]),
         "probs": {c: float(probs[i]) for i, c in enumerate(CLASSES)},
     }
+
+
+def predict_with_cam(pil):
+    """진단 + Grad-CAM → (label, prob, probs(ndarray), cam224, img224).
+
+    diagnose()와 달리 UI(app/views/diagnosis.py)용 — 클래스별 확률을 ndarray로,
+    '어디를 보고 판단했나' Grad-CAM 히트맵과 정규화 역연산한 표시용 원본까지 반환한다.
+    """
+    model = load_diagnosis_model()
+    x = _tf()(pil.convert("RGB")).unsqueeze(0).to(device).requires_grad_(True)
+
+    # 공유 모델(lru_cache)에 backward를 수행하므로 동시 호출을 직렬화한다(FastAPI threadpool 대비).
+    with _cam_lock:
+        store = {}
+        layer = model.layer4[-1]
+
+        def _save(_m, _i, o):
+            o.retain_grad()
+            store["act"] = o
+        handle = layer.register_forward_hook(_save)
+
+        logits = model(x)
+        probs = torch.softmax(logits, dim=1)[0]
+        cls = int(probs.argmax())
+        model.zero_grad()
+        logits[0, cls].backward()
+
+        act = store["act"].detach()[0]
+        grad = store["act"].grad[0].detach()
+        handle.remove()
+
+    w = grad.mean(dim=(1, 2))
+    cam = torch.relu((w[:, None, None] * act).sum(0))
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+    cam = F.interpolate(cam[None, None], size=(224, 224),
+                        mode="bilinear", align_corners=False)[0, 0].detach().cpu().numpy()
+
+    # 표시용 원본(정규화 역연산)
+    img = x.detach()[0].cpu().numpy().transpose(1, 2, 0)
+    img = (img * np.array(IMAGENET_STD) + np.array(IMAGENET_MEAN)).clip(0, 1)
+    return CLASSES[cls], float(probs[cls].detach()), probs.detach().cpu().numpy(), cam, img
 
 
 # ── 부위 게이트 (과실/꽃/잎/줄기) ─────────────────────────────────────────
@@ -137,10 +187,18 @@ def _region(y_center, height):
     return "상단" if r < 1 / 3 else ("중단" if r < 2 / 3 else "하단")
 
 
-def detect(pil, conf=0.25):
-    """YOLO 검출 → [{cls, conf, region}]. region 은 박스 y중심으로 파생한 잎 위치."""
+def _yolo_predict(pil, conf=0.25):
+    """YOLO 1회 추론 결과(ultralytics Results) — detect()/detect_annotated() 공용."""
     yolo = load_yolo()
-    res = yolo.predict(pil.convert("RGB"), device=device, conf=conf, verbose=False)[0]
+    return yolo.predict(pil.convert("RGB"), device=device, conf=conf, verbose=False)[0]
+
+
+def detect(pil, conf=0.25):
+    """YOLO 검출 → [{cls, conf, region}]. region 은 박스 y중심으로 파생한 잎 위치.
+
+    LLM 처방 도구(src/llm/tools.py)용 — 위치 근거만 필요하고 박스 시각화는 불필요.
+    """
+    res = _yolo_predict(pil, conf)
     height = res.orig_shape[0]
     names = res.names
     out = []
@@ -152,6 +210,18 @@ def detect(pil, conf=0.25):
             "region": _region((y1 + y2) / 2, height),
         })
     return out
+
+
+def detect_annotated(pil, conf=0.25):
+    """YOLO 검출 → (박스 그려진 RGB ndarray, [(label, conf), ...]).
+
+    UI(app/views/diagnosis.py)용 — 화면에 그대로 그릴 수 있는 annotated 이미지가 필요.
+    """
+    res = _yolo_predict(pil, conf)
+    annotated = res.plot()[:, :, ::-1]                 # BGR → RGB
+    names = res.names
+    dets = [(names[int(b.cls)], float(b.conf)) for b in res.boxes]
+    return annotated, dets
 
 
 # ── 환경 예측 (LSTM 다변량 시계열) ────────────────────────────────────────
