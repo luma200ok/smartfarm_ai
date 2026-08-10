@@ -1,9 +1,10 @@
 """app/views/diagnosis.py — API 모드(SMARTFARM_API_URL) 렌더 스모크 테스트(이슈 #59 PR 3).
 
 기존 test_app_diagnosis.py는 in-process 경로(로컬 모델 필요, 없으면 skip)만 다룬다. 이 파일은
-`api_client.diagnose_remote`를 몽키패치해 API 모드 분기(`_render_diagnosis_api`/`_render_detect_api`)
-가 예외 없이 완주하는지만 확인한다 — 로컬 모델 가중치가 없어도 항상 실행돼야 한다(API 모드의
-존재 이유 자체가 클라이언트에 모델이 없어도 되는 것이므로 CKPT.exists() 에 의존하지 않는다).
+`api_client.diagnose_remote`(탭1)·`api_client.detect_remote`(탭2, PR 3-1 분리)를 몽키패치해
+API 모드 분기(`_render_diagnosis_api`/`_render_detect_api`)가 예외 없이 완주하는지만 확인한다
+— 로컬 모델 가중치가 없어도 항상 실행돼야 한다(API 모드의 존재 이유 자체가 클라이언트에
+모델이 없어도 되는 것이므로 CKPT.exists() 에 의존하지 않는다).
 """
 import base64
 import io
@@ -42,9 +43,14 @@ def _fake_diagnosis_response(ood_blocked=False):
     }
 
 
+def _fake_detection_response():
+    return {"annotated_png_base64": _png_base64((0, 255, 0)),
+            "boxes": [{"label": "leaf_mold", "conf": 0.77}]}
+
+
 @pytest.fixture
 def _api_mode(monkeypatch):
-    """SMARTFARM_API_URL 설정 + api_client.diagnose_remote 몽키패치(실 HTTP 호출 없음)."""
+    """SMARTFARM_API_URL 설정 + api_client.diagnose_remote/detect_remote 몽키패치(실 HTTP 호출 없음)."""
     import sys
     for p in (ROOT / "src", ROOT / "app"):
         if str(p) not in sys.path:
@@ -54,6 +60,8 @@ def _api_mode(monkeypatch):
     monkeypatch.setenv("SMARTFARM_API_URL", "http://fake-smartfarm-api:8000")
     monkeypatch.setattr(api_client, "diagnose_remote",
                          lambda image_bytes, conf=0.25, filename="image.jpg": _fake_diagnosis_response())
+    monkeypatch.setattr(api_client, "detect_remote",
+                         lambda image_bytes, conf=0.25, filename="image.jpg": _fake_detection_response())
     return api_client
 
 
@@ -75,7 +83,10 @@ def test_diagnosis_page_api_mode_sample_click_renders_without_exception(_api_mod
 
 
 def test_diagnosis_page_api_mode_yolo_sample_click_renders_without_exception(_api_mode):
-    """API 모드에서 탭2(YOLO) 예시 사진 클릭도 예외 없이 완주해야 한다(yolo 필드만 사용)."""
+    """API 모드에서 탭2(YOLO) 예시 사진 클릭 → detect_remote(게이트 없는 /api/detections 전용)
+    몽키패치 응답으로 검출 탭이 렌더돼야 한다(이슈 #59 PR 3-1 — diagnose_remote가 아닌
+    detect_remote가 호출되는지까지 검증: diagnose_remote 몽키패치의 label_kr이 아니라
+    detect_remote 몽키패치의 boxes 내용이 화면에 나와야 한다)."""
     from streamlit.testing.v1 import AppTest
 
     at = AppTest.from_file(str(DIAGNOSIS_PAGE))
@@ -87,6 +98,9 @@ def test_diagnosis_page_api_mode_yolo_sample_click_renders_without_exception(_ap
     buttons[0].click().run(timeout=30)
 
     assert not at.exception, f"API 모드 검출 렌더 중 예외 발생: {[str(e) for e in at.exception]}"
+    body = " ".join(md.value for md in at.subheader) + " ".join(md.value for md in at.markdown)
+    assert "검출 1건" in body
+    assert "77" in body  # detect_remote 몽키패치의 conf=0.77 이 신뢰도 문자열로 보여야 함
 
 
 def test_diagnosis_page_api_mode_ood_blocked_shows_error(monkeypatch, _api_mode):

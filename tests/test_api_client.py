@@ -11,7 +11,15 @@ import pytest
 import requests
 from PIL import Image
 
-from api_client import ApiClientError, api_base, decode_png_base64, diagnose_remote, health_remote, prescribe_remote
+from api_client import (
+    ApiClientError,
+    api_base,
+    decode_png_base64,
+    detect_remote,
+    diagnose_remote,
+    health_remote,
+    prescribe_remote,
+)
 
 
 def _png_base64(color=(255, 0, 0)):
@@ -125,6 +133,52 @@ def test_diagnose_remote_ood_blocked_passthrough(monkeypatch):
         r = diagnose_remote(b"fake-bytes")
     assert r["ood_blocked"] is True
     assert r["yolo"] is None
+
+
+# ── detect_remote() ──────────────────────────────────────────────────────
+def _yolo_response():
+    return {"annotated_png_base64": _png_base64((0, 255, 0)),
+            "boxes": [{"label": "leaf_mold", "conf": 0.8}]}
+
+
+def test_detect_remote_requires_api_base(monkeypatch):
+    monkeypatch.delenv("SMARTFARM_API_URL", raising=False)
+    with pytest.raises(ApiClientError):
+        detect_remote(b"fake-bytes")
+
+
+def test_detect_remote_success(monkeypatch):
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    body = _yolo_response()
+    with patch("requests.post", return_value=MagicMock(status_code=200, json=lambda: body)) as m:
+        r = detect_remote(b"fake-bytes", conf=0.4, filename="leaf.jpg")
+    assert r == body
+    assert m.call_args.args[0] == "http://127.0.0.1:8000/api/detections"
+    assert m.call_args.kwargs["params"] == {"conf": 0.4}
+    assert m.call_args.kwargs["files"]["file"][0] == "leaf.jpg"
+    assert m.call_args.kwargs["timeout"] == 30
+
+
+def test_detect_remote_timeout_raises_connection_failed(monkeypatch):
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    with patch("requests.post", side_effect=requests.Timeout("boom")):
+        with pytest.raises(ApiClientError, match="서빙 API 연결 실패"):
+            detect_remote(b"fake-bytes")
+
+
+def test_detect_remote_429_raises_congestion_message(monkeypatch):
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    with patch("requests.post", return_value=MagicMock(status_code=429, json=lambda: {"detail": "congested"})):
+        with pytest.raises(ApiClientError, match="혼잡") as exc_info:
+            detect_remote(b"fake-bytes")
+    assert exc_info.value.status_code == 429
+
+
+def test_detect_remote_400_uses_server_detail(monkeypatch):
+    monkeypatch.setenv("SMARTFARM_API_URL", "http://127.0.0.1:8000")
+    with patch("requests.post", return_value=MagicMock(status_code=400, json=lambda: {"detail": "비이미지 파일"})):
+        with pytest.raises(ApiClientError, match="비이미지 파일"):
+            detect_remote(b"fake-bytes")
 
 
 # ── prescribe_remote() ───────────────────────────────────────────────────
