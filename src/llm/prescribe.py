@@ -41,6 +41,28 @@ MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
 # 미설정 시 기존 MODEL로 폴백(하위호환).
 WRITER_MODEL = os.getenv("OLLAMA_WRITER_MODEL") or MODEL
 
+# API 리뷰 P2-4 — 최종 처방 JSON 생성 호출(_write_final, fast-path·agentic 공유)에 타임아웃을
+# 건다. module-level ollama.chat(기본 무제한)은 Ollama가 응답을 영영 안 주면 요청이 그대로
+# 행(hang)한다 — 서버 cold 경로(모델 로드 대기)를 감안해 기본 180s로 보수적 설정(무한 대기만
+# 차단하는 목적, 정상 응답 지연은 여유 있게 통과). agentic prescribe()의 tool 라운드 호출은
+# 건드리지 않음(리뷰 스코프 — 공유 헬퍼 경로에만 적용).
+OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "180"))
+_client_instance: "ollama.Client | None" = None
+
+
+def _client() -> "ollama.Client":
+    """`_write_final` 전용 타임아웃 클라이언트(지연 생성, 프로세스 1회).
+
+    테스트 seam: `monkeypatch.setattr(prescribe, "_client", lambda: fake)`로 이 함수를
+    통째로 갈아끼운다(module-level `ollama.chat`을 그대로 쓰는 tool 라운드 호출은
+    기존처럼 `patch("ollama.chat", ...)`로 모킹).
+    """
+    global _client_instance
+    if _client_instance is None:
+        _client_instance = ollama.Client(timeout=OLLAMA_TIMEOUT)
+    return _client_instance
+
+
 MAX_TOOL_ROUNDS = 4
 KEEP_ALIVE = "30m"
 # tool 라운드 중 자유텍스트로 흐를 때(다음 라운드에서 버려지는 응답) 낭비를 줄이는 캡.
@@ -172,8 +194,8 @@ def _write_final(messages: list, user_msg: str, image_path: str | None, diag: di
     on_progress("writing")
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
-        final = ollama.chat(model=model, messages=messages,
-                            format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
+        final = _client().chat(model=model, messages=messages,
+                               format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
