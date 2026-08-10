@@ -8,7 +8,9 @@ in-process 추론 대신 이 클라이언트로 HTTP API를 호출한다. 미설
 - API_BASE는 호출 시점 os.getenv()로 읽는다(모듈 상수 캐싱 금지) — 테스트 monkeypatch 대응.
 - 요청 실패(연결·타임아웃·5xx)는 예외를 삼키지 않고 `ApiClientError`로 감싸 전파한다(뷰가
   st.error로 명시적으로 알리기 위함 — 조용한 in-process 폴백은 하지 않음, 핸드오프 명시).
-- status 코드로 분기(메시지 매칭 금지) — 429=혼잡, 400/413=업로드 문제, 그 외 실패=연결 실패.
+- status 코드로 분기(메시지 매칭 금지) — 429=혼잡, 400/413/422(문자열 detail)=서버 문구,
+  422(리스트 detail)=고정 문구, 5xx=서버 내부 오류, 응답 자체를 못 받음(연결 실패·타임아웃)
+  =연결 실패로 문구를 구분한다(P3-1·P3-2).
 """
 import base64
 import io
@@ -45,22 +47,38 @@ def api_base() -> str | None:
     return url.rstrip("/") if url else None
 
 
+def _server_detail(resp: requests.Response) -> str | None:
+    """`{"detail": "문구"}`(ApiError 단일 패턴)면 문구를, 아니면(리스트·비JSON 등) None을 반환.
+
+    FastAPI 자동 검증 422는 `detail`이 문자열이 아니라 에러 객체 리스트다(`api/errors.py` 참고)
+    — 그 경우 서버 문구를 그대로 노출하지 않고 호출부가 고정 문구로 폴백한다.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return detail if isinstance(detail, str) else None
+
+
 def _raise_for_status(resp: requests.Response) -> None:
     if resp.status_code == 200:
         return
     if resp.status_code == 429:
         raise ApiClientError("서버가 혼잡해요. 잠시 후 다시 시도해 주세요.", status_code=429)
     if resp.status_code in (400, 413):
-        detail = None
-        try:
-            body = resp.json()
-            detail = body.get("detail") if isinstance(body, dict) else None
-        except ValueError:
-            pass
-        msg = detail if isinstance(detail, str) else "업로드한 파일을 확인해 주세요(형식·크기)."
+        msg = _server_detail(resp) or "업로드한 파일을 확인해 주세요(형식·크기)."
         raise ApiClientError(msg, status_code=resp.status_code)
     if resp.status_code == 422:
-        raise ApiClientError("요청 형식이 올바르지 않아요.", status_code=422)
+        # detail이 문자열(ApiError 경로 — 예: /api/prescriptions의 diagnosis 필드 검증 실패)이면
+        # 서버 문구를 그대로 쓰고, 리스트(FastAPI 자동 검증)면 고정 문구로 폴백(P3-1).
+        msg = _server_detail(resp) or "요청 형식이 올바르지 않아요."
+        raise ApiClientError(msg, status_code=422)
+    if 500 <= resp.status_code < 600:
+        # 연결 자체는 됐고(응답을 받음) 서버 내부에서 실패한 경우 — 연결 실패와 문구를
+        # 구분한다(P3-2). 연결 실패(ConnectionError/Timeout)는 각 *_remote()의
+        # requests.RequestException 처리에서 별도로 "서빙 API 연결 실패"를 쓴다.
+        raise ApiClientError("서버 내부 오류예요. 잠시 후 다시 시도해 주세요.", status_code=resp.status_code)
     raise ApiClientError("서빙 API 연결 실패", status_code=resp.status_code)
 
 
@@ -71,13 +89,18 @@ def _require_base() -> str:
     return base
 
 
-def diagnose_remote(image_bytes: bytes, conf: float = 0.25, filename: str = "image.jpg") -> dict:
-    """POST /api/diagnoses — multipart 업로드 → `DiagnosisResponse` dict 그대로 반환."""
+def diagnose_remote(image_bytes: bytes, conf: float = 0.25, filename: str = "image.jpg",
+                     include_visuals: bool = True) -> dict:
+    """POST /api/diagnoses — multipart 업로드 → `DiagnosisResponse` dict 그대로 반환.
+
+    include_visuals=False면 서버가 Grad-CAM·YOLO 계산을 생략한다(cam_png_base64·yolo=None) —
+    라벨·확률·게이트 정보만 필요한 텍스트 전용 호출(처방 뷰)에서 추론 비용을 아낀다(P2-1).
+    """
     base = _require_base()
     try:
         resp = requests.post(
             f"{base}/api/diagnoses",
-            params={"conf": conf},
+            params={"conf": conf, "include_visuals": include_visuals},
             files={"file": (filename, image_bytes, "application/octet-stream")},
             timeout=_DIAG_TIMEOUT,
         )
