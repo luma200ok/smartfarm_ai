@@ -9,15 +9,12 @@
 
 무거운 추론(Grad-CAM·YOLO)은 `api/concurrency.py`의 동시성 캡(최대 2) 안에서만 실행한다.
 """
-import base64
-import io
-
 import numpy as np
 from dl import infer
 from fastapi import APIRouter, File, Query, UploadFile
-from PIL import Image
 
 from ..concurrency import inference_slot
+from ..images import ndarray_to_png_base64
 from ..schemas import DetectionBox, DiagnosisResponse, YoloResult
 from ..uploads import load_pil
 
@@ -33,13 +30,7 @@ def _overlay_png_base64(img: np.ndarray, cam: np.ndarray) -> str:
 
     heat = cm.jet(cam)[..., :3]
     blended = (0.55 * img + 0.45 * heat).clip(0, 1)
-    return _ndarray_to_png_base64((blended * 255).astype("uint8"))
-
-
-def _ndarray_to_png_base64(arr_uint8: np.ndarray) -> str:
-    buf = io.BytesIO()
-    Image.fromarray(arr_uint8).save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
+    return ndarray_to_png_base64((blended * 255).astype("uint8"))
 
 
 @router.post("/diagnoses", response_model=DiagnosisResponse)
@@ -77,7 +68,7 @@ def create_diagnosis(
             part=part,
             cam_png_base64=_overlay_png_base64(img, cam),
             yolo=YoloResult(
-                annotated_png_base64=_ndarray_to_png_base64(annotated.astype("uint8")),
+                annotated_png_base64=ndarray_to_png_base64(annotated.astype("uint8")),
                 boxes=[DetectionBox(label=lab, conf=float(c)) for lab, c in dets],
             ),
         )

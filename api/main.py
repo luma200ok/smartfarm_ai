@@ -1,4 +1,4 @@
-"""FastAPI 서빙 진입점(이슈 #59 PR 2) — `api/routers/*`의 health·diagnoses·prescriptions 라우터.
+"""FastAPI 서빙 진입점(이슈 #59 PR 2) — `api/routers/*`의 health·diagnoses·detections·prescriptions 라우터.
 
 기동:  uvicorn api.main:app --workers 1   (프로젝트 루트에서)
 
@@ -18,7 +18,7 @@ if str(ROOT / "src") not in sys.path:
 from fastapi import FastAPI  # noqa: E402
 
 from .errors import register_error_handlers  # noqa: E402
-from .routers import diagnoses, health, prescriptions  # noqa: E402
+from .routers import detections, diagnoses, health, prescriptions  # noqa: E402
 
 app = FastAPI(
     title="SmartFarm AI API",
@@ -29,4 +29,5 @@ register_error_handlers(app)
 
 app.include_router(health.router, prefix="/api")
 app.include_router(diagnoses.router, prefix="/api")
+app.include_router(detections.router, prefix="/api")
 app.include_router(prescriptions.router, prefix="/api")
