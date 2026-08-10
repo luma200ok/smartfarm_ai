@@ -87,6 +87,27 @@ def diagnose_remote(image_bytes: bytes, conf: float = 0.25, filename: str = "ima
     return resp.json()
 
 
+def detect_remote(image_bytes: bytes, conf: float = 0.25, filename: str = "image.jpg") -> dict:
+    """POST /api/detections — multipart 업로드 → `YoloResult` dict(annotated_png_base64·boxes).
+
+    게이트 없이 검출만 한다(이슈 #59 PR 3-1 — `app/views/diagnosis.py` 탭2가 게이트 있는
+    `/api/diagnoses`를 재사용하면 in-process 탭2와 결과가 달라지고 Grad-CAM도 낭비 계산돼
+    분리했다). `diagnose_remote`와 응답 스키마는 다르지만 요청·에러 처리 방식은 동일하다.
+    """
+    base = _require_base()
+    try:
+        resp = requests.post(
+            f"{base}/api/detections",
+            params={"conf": conf},
+            files={"file": (filename, image_bytes, "application/octet-stream")},
+            timeout=_DIAG_TIMEOUT,
+        )
+    except requests.RequestException as e:
+        raise ApiClientError("서빙 API 연결 실패") from e
+    _raise_for_status(resp)
+    return resp.json()
+
+
 def prescribe_remote(question: str, diagnosis: dict | None = None,
                       image_bytes: bytes | None = None, filename: str = "image.jpg") -> dict:
     """POST /api/prescriptions — multipart(question·diagnosis JSON 문자열·선택 file) → `Prescription` dict."""
