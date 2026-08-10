@@ -13,7 +13,9 @@ WorkingDirectory=/opt/smartfarm_ai
 # 워커를 늘리면 resnet18·YOLO·부위 게이트 모델이 워커 수만큼 메모리에 중복 로드된다.
 Environment=OMP_NUM_THREADS=1
 # 외부 노출은 nginx(공용, 80/443)가 담당 → uvicorn 은 루프백에만 바인딩
-# ★ 바이너리(.venv/bin/uvicorn) 직접 exec 금지 → python -m uvicorn 으로 호출(smartfarm-ai.service와 동일 패턴)
+# ★ 바이너리(.venv/bin/uvicorn) 직접 exec 금지 → python -m uvicorn 으로 호출
+#   (기존 smartfarm-ai.service는 .venv/bin/streamlit 을 직접 exec — 이 서비스는 그와 달리
+#    shebang 스크립트 직접 exec 시 SELinux 도메인 전이 이슈를 회피하려고 python -m 방식 채택)
 ExecStart=/opt/smartfarm_ai/.venv/bin/python -m uvicorn api.main:app \
           --host 127.0.0.1 \
           --port 8000 \

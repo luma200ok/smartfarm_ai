@@ -178,8 +178,10 @@ curl -s http://127.0.0.1:8000/api/health        # {"status":"ok",...} 확인
 ```
 
 ### ③ nginx `/api/*` 프록시 블록 추가
-기존 `/etc/nginx/conf.d/smartfarm-ai.conf`의 `server { ... }` 블록 **안**, 기존 `location /`
-**보다 위**에 추가(더 구체적인 경로가 먼저 매칭돼야 함):
+기존 `/etc/nginx/conf.d/smartfarm-ai.conf`의 `server { ... }` 블록 **안**에 추가. nginx의 prefix
+`location`은 파일 내 작성 순서와 무관하게 **가장 긴 prefix가 우선 매칭**되므로 `location /api/`는
+`location /` 보다 위/아래 어디에 둬도 동작은 같다 — 다만 가독성을 위해 아래처럼 `location /`
+**위에 두는 걸 권장**:
 ```nginx
     location /api/ {
         proxy_pass http://127.0.0.1:8000;

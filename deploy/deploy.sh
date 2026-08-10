@@ -33,17 +33,21 @@ echo "▶ [5/7] 서비스 재시작 — smartfarm-ai(Streamlit)"
 sudo systemctl restart smartfarm-ai
 
 echo "▶ [6/7] 서비스 재시작 — smartfarm-api(FastAPI 서빙, 이슈 #59)"
-# 서버에 smartfarm-api.service 가 아직 설치 안 됐을 수 있음(PR 4 머지 직후 최초 배포 전) →
-# 조용히 스킵하지 않고 설치를 강제한다. 미설치면 명확한 에러로 exit 1.
+# 서버에 smartfarm-api.service 가 아직 설치 안 됐을 수 있음(PR 4 머지 직후 최초 배포 전).
+# 여기서 곧장 exit 1 하면 안 됨 — 이미 [5/7]에서 재시작된 smartfarm-ai(Streamlit)의 헬스체크가
+# [7/7]에서 통째로 스킵돼 "새 코드로 떠 있는데 무점검 방치"가 된다(code-reviewer P1).
+# 그래서 여기서는 플래그만 남기고 계속 진행 → [7/7]에서 smartfarm-ai는 항상 검증하고,
+# API_INSTALLED=0 이면 최종 결과는 그대로 실패 처리(설치 강제 의도는 보존).
+API_INSTALLED=1
 if systemctl list-unit-files | grep -q '^smartfarm-api\.service'; then
   sudo systemctl restart smartfarm-api
 else
-  echo "❌ smartfarm-api.service 미설치 — deploy/deploy_oci.md '9. 서빙 API(이슈 #59)' 섹션대로 서버에 먼저 설치·enable 하세요"
-  exit 1
+  API_INSTALLED=0
+  echo "❌ smartfarm-api.service 미설치 — deploy/deploy_oci.md '9. 서빙 API(이슈 #59)' 섹션대로 서버에 먼저 설치·enable 하세요(smartfarm-ai 헬스체크는 계속 진행)"
 fi
 
 echo "▶ [7/7] 헬스체크"
-# 재시도 포함(기존 /_stcore/health 패턴 미러) — 두 서비스 모두 확인
+# 재시도 포함(기존 /_stcore/health 패턴 미러)
 check_health() {
   local url="$1" label="$2"
   for i in $(seq 1 10); do
@@ -58,9 +62,17 @@ check_health() {
 }
 
 HEALTH_FAILED=0
+# smartfarm-ai는 API 설치 여부와 무관하게 항상 검증(이미 restart된 걸 무점검 방치하지 않음)
 check_health "http://127.0.0.1:8501/_stcore/health" smartfarm-ai || HEALTH_FAILED=1
-check_health "http://127.0.0.1:8000/api/health" smartfarm-api || HEALTH_FAILED=1
+if [ "$API_INSTALLED" = "1" ]; then
+  check_health "http://127.0.0.1:8000/api/health" smartfarm-api || HEALTH_FAILED=1
+else
+  # 미설치 상태를 실패로 집계 — exit 0으로 새지 않게 해서 설치 강제 의도를 유지(CD 실패 가시화)
+  HEALTH_FAILED=1
+fi
 
+# 종료 코드: smartfarm-ai·smartfarm-api(설치+헬스) 모두 정상이면 0 / 그 외(둘 중 헬스 실패, 또는
+# smartfarm-api 미설치 자체)면 1 — 두 경로 모두 아래 한 줄로 귀결된다.
 if [ "$HEALTH_FAILED" = "1" ]; then
   exit 1
 fi
