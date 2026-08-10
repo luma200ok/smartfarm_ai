@@ -1,6 +1,15 @@
-"""src/llm/prescribe.py — 환각 방어 로직(모킹) + 통합(실 Ollama, 마크)."""
+"""src/llm/prescribe.py — 환각 방어 로직(모킹) + 통합(실 Ollama, 마크).
+
+P2-4(이슈 #59 PR 2 리뷰) — 최종 처방 JSON 생성 호출(`_write_final`)은 이제 module-level
+`ollama.chat`이 아니라 타임아웃 클라이언트 `prescribe._client().chat(...)`을 거친다. tool
+라운드 호출(agentic `prescribe()` 전용)은 그대로 `ollama.chat`을 쓴다 — 그래서 아래 테스트들은
+두 호출을 각각 `patch("ollama.chat", ...)`(tool 라운드)와 `_stub_final_chat(...)`(최종 작성)로
+나눠 모킹한다(`_stub_final_chat`을 안 쓰면 최종 호출이 실제 Ollama로 새어나간다).
+"""
 import json
-from unittest.mock import patch
+import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import ollama
 import pytest
@@ -12,6 +21,20 @@ _FINAL = json.dumps({
     "진단요약": "잎곰팡이병 의심", "원인": "고온다습", "즉시조치": "감염 잎 제거",
     "예방": "환기", "재촬영시점": "3일 후", "근거출처": [],
 }, ensure_ascii=False)
+_FINAL_MSG = {"message": {"role": "assistant", "content": _FINAL}}
+
+
+def _stub_final_chat(monkeypatch, *, return_value=None, side_effect=None):
+    """`_write_final`이 쓰는 `prescribe._client().chat(...)`를 모킹(P2-4 seam).
+
+    반환된 Mock으로 call_count·call_args 등을 검증할 수 있다. 지정하지 않으면 이 stub이
+    끝난 뒤에도 다음 테스트에 영향 없게 monkeypatch가 원상복구한다.
+    """
+    mock_chat = MagicMock(side_effect=side_effect) if side_effect is not None \
+        else MagicMock(return_value=return_value)
+    fake_client = SimpleNamespace(chat=mock_chat)
+    monkeypatch.setattr(prescribe, "_client", lambda: fake_client)
+    return mock_chat
 
 
 # ── 환각 방어 ①·② : 신뢰도 밴드·차단·범위밖 지시문 ───────────────────────
@@ -37,13 +60,43 @@ def test_guard_error_asks_retry():
     assert "재시도" in _guard_directive({"error": "FileNotFoundError: x"})
 
 
+# ── P2-4: 타임아웃 클라이언트(_client()) ───────────────────────────────────
+def test_client_creates_ollama_client_with_configured_timeout(monkeypatch):
+    """_client()가 ollama.Client(timeout=OLLAMA_TIMEOUT)로 생성되는지(무한 행 방지)."""
+    monkeypatch.setattr(prescribe, "_client_instance", None)
+    captured = {}
+    real_client_cls = prescribe.ollama.Client
+
+    def _spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_client_cls(*args, **kwargs)
+
+    monkeypatch.setattr(prescribe.ollama, "Client", _spy)
+    prescribe._client()
+    assert captured["timeout"] == prescribe.OLLAMA_TIMEOUT
+
+
+def test_client_is_cached_singleton(monkeypatch):
+    """매 호출마다 새 Client(=새 httpx 연결 풀)를 만들지 않는다."""
+    monkeypatch.setattr(prescribe, "_client_instance", None)
+    c1 = prescribe._client()
+    c2 = prescribe._client()
+    assert c1 is c2
+
+
+def test_ollama_timeout_defaults_to_180_without_env():
+    """OLLAMA_TIMEOUT 미설정 시 서버 cold 경로를 감안한 보수적 기본값 180s."""
+    if "OLLAMA_TIMEOUT" in os.environ:
+        pytest.skip("OLLAMA_TIMEOUT 환경변수가 설정된 프로세스라 기본값 검증 스킵")
+    assert prescribe.OLLAMA_TIMEOUT == 180.0
+
+
 # ── 오케스트레이션(ollama 모킹) : 스키마·tool 흐름 ─────────────────────────
-def test_prescribe_no_tool_returns_prescription():
-    responses = [
+def test_prescribe_no_tool_returns_prescription(monkeypatch):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=[
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
-    ]
-    with patch("ollama.chat", side_effect=responses):
+    ]):
         p = prescribe.prescribe("오이 병도 알려줘")  # 범위 밖
     assert isinstance(p, Prescription)
     assert p.진단요약 == "잎곰팡이병 의심"
@@ -52,18 +105,18 @@ def test_prescribe_no_tool_returns_prescription():
 
 def test_prescribe_runs_tool_then_validates(monkeypatch):
     """모델이 get_diagnosis 호출 → 실제 tool은 모킹 → 최종 JSON 검증."""
-    responses = [
+    tool_round_responses = [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
                         lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
                                             "prob": 0.9, "probs": {}, "part": "leaf"})
     monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [])  # RAG 실호출 차단
     monkeypatch.setattr(prescribe, "get_forecast", lambda: {"unavailable": True})  # forecast 실호출 차단
-    with patch("ollama.chat", side_effect=responses):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=tool_round_responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
     assert p.즉시조치
@@ -71,11 +124,10 @@ def test_prescribe_runs_tool_then_validates(monkeypatch):
 
 def test_prescribe_fills_sources_from_rag(monkeypatch):
     """RAG 검색 결과 → 근거출처가 코드로 채워짐(LLM 아님)."""
-    responses = [
+    tool_round_responses = [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
                         lambda image_path: {"ood_blocked": False, "label": "leaf_mold",
@@ -83,18 +135,18 @@ def test_prescribe_fills_sources_from_rag(monkeypatch):
     monkeypatch.setattr(prescribe, "retrieve", lambda q, disease=None, k=3: [
         {"title": "잎곰팡이병 방제", "source": "https://ncpms.rda.go.kr/", "text": "환기하라"}])
     monkeypatch.setattr(prescribe, "get_forecast", lambda: {"unavailable": True})
-    with patch("ollama.chat", side_effect=responses):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=tool_round_responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert p.근거출처 == ["잎곰팡이병 방제 — https://ncpms.rda.go.kr/"]
 
 
 def test_prescribe_ood_skips_rag(monkeypatch):
     """진단 차단 시 RAG 검색을 아예 호출하지 않는다(엉뚱한 근거 방지)."""
-    responses = [
+    tool_round_responses = [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis",
                         lambda image_path: {"ood_blocked": True, "reason": "잎 아님"})
@@ -105,7 +157,8 @@ def test_prescribe_ood_skips_rag(monkeypatch):
         return []
 
     monkeypatch.setattr(prescribe, "retrieve", _rt)
-    with patch("ollama.chat", side_effect=responses):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=tool_round_responses):
         p = prescribe.prescribe("봐줘", image_path="x.jpg")
     assert called["n"] == 0
     assert p.근거출처 == []
@@ -113,28 +166,27 @@ def test_prescribe_ood_skips_rag(monkeypatch):
 
 def test_prescribe_tool_error_still_returns_prescription(monkeypatch):
     """tool 실행 예외 → 잡아서 error 로 되먹이고 여전히 유효한 Prescription 반환(P2.8)."""
-    responses = [
+    tool_round_responses = [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]
 
     def _boom(image_path):
         raise FileNotFoundError("no such file")
 
     monkeypatch.setitem(prescribe.TOOL_REGISTRY, "get_diagnosis", _boom)
-    with patch("ollama.chat", side_effect=responses):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=tool_round_responses):
         p = prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
 
 
-def _diag_flow_responses():
+def _diag_flow_tool_round_responses():
     return [
         {"message": {"role": "assistant", "content": "", "tool_calls": [
             {"function": {"name": "get_diagnosis", "arguments": {"image_path": "x.jpg"}}}]}},
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]
 
 
@@ -152,7 +204,8 @@ def test_prescribe_injects_forecast_for_leaf_mold(monkeypatch):
                 "humidity_mean": 90.0, "recent_temp": 29.0}
 
     monkeypatch.setattr(prescribe, "get_forecast", _fc)
-    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=_diag_flow_tool_round_responses()):
         prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert called["n"] == 1
 
@@ -166,46 +219,48 @@ def test_prescribe_skips_forecast_for_non_leafmold(monkeypatch):
     called = {"n": 0}
     monkeypatch.setattr(prescribe, "get_forecast",
                         lambda: called.__setitem__("n", called["n"] + 1) or {"unavailable": True})
-    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=_diag_flow_tool_round_responses()):
         prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert called["n"] == 0
 
 
-def test_prescribe_tool_round_caps_num_predict_and_sets_keep_alive():
-    """C1(#15) — tool 라운드 chat 호출에 num_predict 캡·keep_alive 전달 검증(낭비 라운드 지연 완화)."""
-    responses = [
+def test_prescribe_tool_round_caps_num_predict_and_sets_keep_alive(monkeypatch):
+    """C1(#15) — tool 라운드 chat 호출에 num_predict 캡·keep_alive 전달 검증(낭비 라운드 지연 완화).
+
+    최종 작성 호출의 keep_alive는 `_stub_final_chat`으로 옮겨간 mock에서 별도로 검증한다
+    (P2-4로 두 호출이 서로 다른 클라이언트를 타게 됐다).
+    """
+    final_mock = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=[
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
-    ]
-    with patch("ollama.chat", side_effect=responses) as mock_chat:
+    ]) as mock_chat:
         prescribe.prescribe("오이 병도 알려줘")
-    first_call_kwargs = mock_chat.call_args_list[0].kwargs
-    assert first_call_kwargs["options"] == {"num_predict": prescribe.TOOL_ROUND_NUM_PREDICT}
-    assert first_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
-    final_call_kwargs = mock_chat.call_args_list[1].kwargs
-    assert final_call_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+    tool_round_kwargs = mock_chat.call_args_list[0].kwargs
+    assert tool_round_kwargs["options"] == {"num_predict": prescribe.TOOL_ROUND_NUM_PREDICT}
+    assert tool_round_kwargs["keep_alive"] == prescribe.KEEP_ALIVE
+    assert final_mock.call_args.kwargs["keep_alive"] == prescribe.KEEP_ALIVE
 
 
 def test_prescribe_warns_when_diagnosis_not_called_with_image(monkeypatch, caplog):
     """P1 — 이미지 첨부됐는데 tool 미호출로 종료되면 경고 로그로 가시화(조용한 '진단 보류' 방지)."""
-    responses = [
-        {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
-    ]
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
     with caplog.at_level("WARNING"):
-        with patch("ollama.chat", side_effect=responses):
+        with patch("ollama.chat", side_effect=[
+            {"message": {"role": "assistant", "content": "", "tool_calls": []}},
+        ]):
             prescribe.prescribe("이 잎 봐줘", image_path="x.jpg")
     assert any("tool 호출 없이 종료" in r.message for r in caplog.records)
 
 
-def test_prescribe_on_progress_exception_does_not_break_prescription():
+def test_prescribe_on_progress_exception_does_not_break_prescription(monkeypatch):
     """P2-1 — on_progress 콜백이 raise해도 처방은 정상 반환된다."""
     def _boom(stage):
         raise RuntimeError("ui 콜백 실패")
 
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
     with patch("ollama.chat", side_effect=[
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]):
         p = prescribe.prescribe("오이 병도 알려줘", on_progress=_boom)
     assert isinstance(p, Prescription)
@@ -222,22 +277,25 @@ def test_prescribe_on_progress_reports_stages(monkeypatch):
                         lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
                                 "humidity_mean": 90.0, "recent_temp": 29.0})
     stages: list[str] = []
-    with patch("ollama.chat", side_effect=_diag_flow_responses()):
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    with patch("ollama.chat", side_effect=_diag_flow_tool_round_responses()):
         prescribe.prescribe("이 잎 봐줘", image_path="x.jpg", on_progress=stages.append)
     assert stages == ["diagnosis", "rag", "forecast", "writing"]
 
 
-def test_prescribe_no_on_progress_unchanged():
+def test_prescribe_no_on_progress_unchanged(monkeypatch):
     """on_progress 미지정(None)이면 예외 없이 기존과 동일하게 동작(하위호환)."""
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
     with patch("ollama.chat", side_effect=[
         {"message": {"role": "assistant", "content": "", "tool_calls": []}},
-        {"message": {"role": "assistant", "content": _FINAL}},
     ]):
         p = prescribe.prescribe("오이 병도 알려줘")
     assert isinstance(p, Prescription)
 
 
 # ── fast-path(1-call, 이슈 #18) ────────────────────────────────────────
+# fast-path는 tool 라운드가 없어 ollama.chat을 아예 호출하지 않는다 — LLM 호출은 모두
+# `_write_final`의 `_client().chat(...)` 1건뿐이라 `_stub_final_chat`만 있으면 된다.
 def test_fast_calls_diagnosis_directly_not_via_llm(monkeypatch):
     """이미지 있으면 코드가 직접 get_diagnosis를 호출 — LLM tool 선택 없이."""
     calls = {"n": 0}
@@ -251,11 +309,11 @@ def test_fast_calls_diagnosis_directly_not_via_llm(monkeypatch):
     monkeypatch.setattr(prescribe, "get_forecast",
                         lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
                                 "humidity_mean": 90.0, "recent_temp": 29.0})
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}) as mock_chat:
-        p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
+    mock_chat = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
     assert calls["n"] == 1
     assert isinstance(p, Prescription)
-    # ollama.chat은 최종 구조화 JSON 1회만 호출됨(format 포함)
+    # 최종 구조화 JSON 1회만 호출됨(format 포함)
     assert mock_chat.call_count == 1
     assert mock_chat.call_args.kwargs["format"] == Prescription.model_json_schema()
 
@@ -263,16 +321,16 @@ def test_fast_calls_diagnosis_directly_not_via_llm(monkeypatch):
 def test_fast_uses_writer_model_env(monkeypatch):
     """OLLAMA_WRITER_MODEL 설정 시 그 모델명으로 최종 chat 호출."""
     monkeypatch.setattr(prescribe, "WRITER_MODEL", "exaone3.5:2.4b")
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}) as mock_chat:
-        prescribe.prescribe_fast("오이 병도 알려줘")  # 이미지 없음 → 진단 생략
+    mock_chat = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("오이 병도 알려줘")  # 이미지 없음 → 진단 생략
     assert mock_chat.call_args.kwargs["model"] == "exaone3.5:2.4b"
 
 
 def test_fast_falls_back_to_model_when_writer_unset(monkeypatch):
     """OLLAMA_WRITER_MODEL 미설정 시 MODEL로 폴백."""
     monkeypatch.setattr(prescribe, "WRITER_MODEL", prescribe.MODEL)
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}) as mock_chat:
-        prescribe.prescribe_fast("오이 병도 알려줘")
+    mock_chat = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("오이 병도 알려줘")
     assert mock_chat.call_args.kwargs["model"] == prescribe.MODEL
 
 
@@ -287,8 +345,8 @@ def test_fast_on_progress_order(monkeypatch):
                         lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
                                 "humidity_mean": 90.0, "recent_temp": 29.0})
     stages: list[str] = []
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}):
-        prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg", on_progress=stages.append)
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg", on_progress=stages.append)
     assert stages == ["diagnosis", "rag", "forecast", "writing"]
 
 
@@ -303,8 +361,8 @@ def test_fast_ood_blocked_skips_rag_and_guards(monkeypatch):
         return []
 
     monkeypatch.setattr(prescribe, "retrieve", _rt)
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}) as mock_chat:
-        prescribe.prescribe_fast("봐줘", image_path="x.jpg")
+    mock_chat = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("봐줘", image_path="x.jpg")
     assert called["n"] == 0
     messages = mock_chat.call_args.kwargs["messages"]
     assert any("재촬영" in m.get("content", "") for m in messages)
@@ -316,8 +374,8 @@ def test_fast_diagnosis_failure_guards_no_assertion(monkeypatch):
         raise FileNotFoundError("no such file")
 
     monkeypatch.setattr(prescribe, "get_diagnosis", _boom)
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}) as mock_chat:
-        p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
+    mock_chat = _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
     assert isinstance(p, Prescription)
     messages = mock_chat.call_args.kwargs["messages"]
     assert any("재시도" in m.get("content", "") for m in messages)
@@ -337,8 +395,8 @@ def test_fast_reuses_given_diag_skips_get_diagnosis(monkeypatch):
                         lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
                                 "humidity_mean": 90.0, "recent_temp": 29.0})
     given_diag = {"ood_blocked": False, "label": "leaf_mold", "prob": 0.9, "probs": {}, "part": "leaf"}
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}):
-        p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg", diag=given_diag)
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg", diag=given_diag)
     assert calls["n"] == 0
     assert isinstance(p, Prescription)
 
@@ -356,16 +414,16 @@ def test_fast_diag_none_keeps_existing_behavior(monkeypatch):
     monkeypatch.setattr(prescribe, "get_forecast",
                         lambda: {"next_temp": 30.0, "trend": "유지", "humidity_risk": "높음",
                                 "humidity_mean": 90.0, "recent_temp": 29.0})
-    with patch("ollama.chat", return_value={"message": {"role": "assistant", "content": _FINAL}}):
-        prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
     assert calls["n"] == 1
 
 
-def test_fast_schema_violation_retries_then_falls_back():
+def test_fast_schema_violation_retries_then_falls_back(monkeypatch):
     """스키마 위반 응답이 2회 연속이면 안전 폴백 Prescription을 반환한다."""
     bad = {"message": {"role": "assistant", "content": "not json"}}
-    with patch("ollama.chat", side_effect=[bad, bad]) as mock_chat:
-        p = prescribe.prescribe_fast("오이 병도 알려줘")
+    mock_chat = _stub_final_chat(monkeypatch, side_effect=[bad, bad])
+    p = prescribe.prescribe_fast("오이 병도 알려줘")
     assert p.진단요약.startswith("처방 생성에 실패")
     assert mock_chat.call_count == 2
 

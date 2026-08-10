@@ -6,6 +6,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))  # `import api`(이슈 #59 PR 2, FastAPI 서빙) 용 — tests/ 는 패키지가 아니라 pytest가 루트를 자동으로 넣어주지 않음
 
 _IMG_SUFFIXES = {".jpg", ".jpeg", ".png"}
 
@@ -56,3 +57,13 @@ def ood_image(tmp_path):
     p = tmp_path / "noise.png"
     Image.fromarray(arr).save(p)
     return str(p)
+
+
+@pytest.fixture
+def api_client():
+    """이슈 #59 PR 2 — FastAPI TestClient(`api.main:app`). tests/test_api_*.py 공용."""
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+    with TestClient(app) as c:
+        yield c
