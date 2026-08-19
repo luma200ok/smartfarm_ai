@@ -3,6 +3,8 @@
 처방 응답은 `src/llm/prescribe.py`의 `Prescription`(이미 pydantic BaseModel)을 그대로 재사용한다
 (핸드오프 확정 — 별도 응답 스키마로 감싸지 않음).
 """
+from datetime import datetime
+
 from dl import infer
 from pydantic import BaseModel, Field, field_validator
 
@@ -88,3 +90,35 @@ class DiagnosisIn(BaseModel):
                 if not (0.0 <= p <= 1.0):
                     raise ValueError(f"probs[{k}] 값이 0.0~1.0 범위를 벗어남: {p}")
         return v
+
+
+# ── GET /api/environment/today(smartfarm_ai#66) ──────────────────────────
+# docs/api-contract.md "Phase 3 확장" §의 EnvironmentTodayResponse 초안을 따른다(이 라우터
+# 구현이 확정본 — 메타가 그 절을 갱신). 필드는 전부 optional/기본값을 둬 가용 데이터만으로도
+# 200을 반환할 수 있게 한다(레포 기존 "unavailable graceful" 원칙, health.py와 동일).
+class OutdoorReading(BaseModel):
+    temp: float | None = None
+    humidity: float | None = None
+
+
+class IndoorReading(BaseModel):
+    """`controlled=True` 고정 — control/live.py의 ctrl_temp/ctrl_hum(제어 후 값)을 그대로
+    쓰므로, 이 서비스의 "실내값"은 정의상 항상 제어 결과다(원시 센서값 개념 없음)."""
+
+    temp: float | None = None
+    humidity: float | None = None
+    controlled: bool = True
+
+
+class DeviceStatus(BaseModel):
+    name: str
+    on: bool
+
+
+class EnvironmentTodayResponse(BaseModel):
+    demo: bool = True
+    updated_at: datetime
+    outdoor: OutdoorReading
+    indoor: IndoorReading
+    devices: list[DeviceStatus] = Field(default_factory=list)
+    alerts: list[str] = Field(default_factory=list)
