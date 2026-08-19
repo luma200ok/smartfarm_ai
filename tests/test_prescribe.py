@@ -426,6 +426,34 @@ def test_fast_schema_violation_retries_then_falls_back(monkeypatch):
     p = prescribe.prescribe_fast("오이 병도 알려줘")
     assert p.진단요약.startswith("처방 생성에 실패")
     assert mock_chat.call_count == 2
+    assert p.fallback is True  # smartfarm_ai#66 — 안전 폴백 경로는 fallback=True
+
+
+def test_fast_normal_path_fallback_is_false(monkeypatch):
+    """정상 처방 경로는 fallback 기본값(False)을 그대로 유지한다(smartfarm_ai#66)."""
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    p = prescribe.prescribe_fast("오이 병도 알려줘")
+    assert p.fallback is False
+
+
+def test_fast_passes_caller_ref_to_history(monkeypatch):
+    """smartfarm_ai#66 — caller_ref가 history.save_prescription까지 그대로 전달된다."""
+    calls = {}
+    monkeypatch.setattr(prescribe.history, "save_prescription",
+                        lambda *a, **k: calls.update(k) or True)
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("오이 병도 알려줘", caller_ref="tenant-42")
+    assert calls.get("caller_ref") == "tenant-42"
+
+
+def test_fast_caller_ref_default_none(monkeypatch):
+    """caller_ref 미전달 시 history 저장에도 None으로 전달된다(기존과 동일)."""
+    calls = {}
+    monkeypatch.setattr(prescribe.history, "save_prescription",
+                        lambda *a, **k: calls.update(k) or True)
+    _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    prescribe.prescribe_fast("오이 병도 알려줘")
+    assert calls.get("caller_ref") is None
 
 
 def _ollama_up():

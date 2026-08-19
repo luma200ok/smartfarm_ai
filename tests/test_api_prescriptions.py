@@ -169,6 +169,38 @@ def test_prescriptions_returns_429_when_slots_exhausted(api_client):
             _inference_slots.release()
 
 
+# ── smartfarm_ai#66: caller_ref(이력 태깅) ──────────────────────────────
+def test_prescriptions_caller_ref_forwarded_to_prescribe_fast(api_client, monkeypatch):
+    captured = {}
+
+    def _fake_prescribe_fast(question, image_path=None, diag=None, caller_ref=None, **_):
+        captured["caller_ref"] = caller_ref
+        return prescribe.Prescription(진단요약="정상", 원인="-", 즉시조치="-", 예방="-", 재촬영시점="-")
+
+    monkeypatch.setattr("api.routers.prescriptions.prescribe_fast", _fake_prescribe_fast)
+    r = api_client.post("/api/prescriptions", data={"question": "x", "caller_ref": "tenant-abc"})
+    assert r.status_code == 200
+    assert captured["caller_ref"] == "tenant-abc"
+
+
+def test_prescriptions_caller_ref_omitted_defaults_none(api_client, monkeypatch):
+    captured = {}
+
+    def _fake_prescribe_fast(question, image_path=None, diag=None, caller_ref=None, **_):
+        captured["caller_ref"] = caller_ref
+        return prescribe.Prescription(진단요약="정상", 원인="-", 즉시조치="-", 예방="-", 재촬영시점="-")
+
+    monkeypatch.setattr("api.routers.prescriptions.prescribe_fast", _fake_prescribe_fast)
+    r = api_client.post("/api/prescriptions", data={"question": "x"})
+    assert r.status_code == 200
+    assert captured["caller_ref"] is None
+
+
+def test_prescriptions_caller_ref_over_64_chars_is_422(api_client):
+    r = api_client.post("/api/prescriptions", data={"question": "x", "caller_ref": "a" * 65})
+    assert r.status_code == 422
+
+
 # ── P3-1: 비이미지 업로드는 진단·LLM 호출 전에 조기 차단 ────────────────────
 def test_prescriptions_non_image_file_is_400_before_diagnosis_or_llm(api_client, monkeypatch):
     diag_calls = {"n": 0}
