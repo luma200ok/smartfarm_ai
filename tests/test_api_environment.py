@@ -139,3 +139,35 @@ def test_environment_today_state_from_other_day_is_ignored(api_client, monkeypat
     body = r.json()
     assert body["indoor"] == {"temp": None, "humidity": None, "controlled": True}
     assert body["devices"] == []
+
+
+def test_environment_today_malformed_snapshot_graceful_200(api_client, monkeypatch, _isolated_state):
+    """P2 픽스 — 스냅샷 타입이 손상돼도(ctrl_temp가 숫자가 아님) 500 대신 200 + 빈 값 +
+    alerts 안내로 폴백한다("항상 200" 원칙)."""
+    from llm import weather
+
+    monkeypatch.setattr(weather, "get_current",
+                        lambda: {"unavailable": False, "temp": 20.0, "humidity": 40.0})
+
+    import datetime as _dt
+    fixed_now = _dt.datetime(2026, 8, 20, 14, 0, 0)
+
+    class _FixedDatetime(_dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now
+
+    from api.routers import environment
+    monkeypatch.setattr(environment, "datetime", _FixedDatetime)
+
+    today_str = fixed_now.date().isoformat()
+    _write_state(_isolated_state, today_str, {
+        "14": {"ctrl_temp": "온도아님", "ctrl_hum": 58.0, "devices_on": ["cooling_fan"]},
+    })
+
+    r = api_client.get("/api/environment/today")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["indoor"] == {"temp": None, "humidity": None, "controlled": True}
+    assert body["devices"] == []
+    assert any("스냅샷 데이터 형식 오류" in a for a in body["alerts"])

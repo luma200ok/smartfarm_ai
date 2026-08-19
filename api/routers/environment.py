@@ -16,6 +16,7 @@ demo=true 고정 — 1차 배포는 농장↔센서 매핑 이전(전 농장 공
 불가해도 5xx를 내지 않고 항상 200 + 가용 필드만 채워 반환한다. 불가 사유·데이터 결측/오래됨은
 alerts 배열의 안내 문자열로만 전달한다(런타임 로직에 영향 없음).
 """
+import logging
 from datetime import datetime
 
 from control.actuators import DEVICES
@@ -24,6 +25,8 @@ from fastapi import APIRouter
 from llm import weather
 
 from ..schemas import DeviceStatus, EnvironmentTodayResponse, IndoorReading, OutdoorReading
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(tags=["environment"])
 
@@ -39,13 +42,16 @@ def _latest_snapshot(snapshots: dict, now_hour: int) -> "tuple[dict | None, int 
 
 
 def _recorded_at(snap: dict, fallback: datetime) -> datetime:
-    """스냅샷의 recorded_at(ISO 문자열) → datetime. 파싱 실패/결측 시 fallback(서버 현재 시각)."""
+    """스냅샷의 recorded_at(ISO 문자열) → datetime. 파싱 실패/결측 시 fallback(서버 현재 시각).
+
+    TypeError도 함께 잡는다(P2 픽스) — recorded_at이 문자열이 아닌 타입(숫자·리스트 등
+    손상된 상태 파일)이면 `fromisoformat`이 ValueError가 아니라 TypeError를 던진다."""
     raw = snap.get("recorded_at")
     if not raw:
         return fallback
     try:
         return datetime.fromisoformat(raw)
-    except ValueError:
+    except (ValueError, TypeError):
         return fallback
 
 
@@ -70,12 +76,23 @@ def get_environment_today() -> EnvironmentTodayResponse:
         devices: list[DeviceStatus] = []
         updated_at = now
     else:
-        indoor = IndoorReading(temp=snap.get("ctrl_temp"), humidity=snap.get("ctrl_hum"))
-        devices_on = set(snap.get("devices_on") or [])
-        devices = [DeviceStatus(name=d, on=d in devices_on) for d in DEVICES]
-        updated_at = _recorded_at(snap, fallback=now)
-        if snap_hour is not None and snap_hour < now.hour:
-            alerts.append(f"최근 기록 {snap_hour}시 — 이후 갱신 없음")
+        # 스냅샷 조립 전체를 감싼다(P2 픽스) — 상태 파일이 손상돼 타입이 어긋나면(예: ctrl_temp가
+        # 숫자가 아니거나 devices_on이 리스트가 아님) IndoorReading/DeviceStatus 생성이나
+        # set() 변환에서 ValueError(pydantic ValidationError 포함)·TypeError가 날 수 있다.
+        # "항상 200" 원칙을 지키기 위해 그 경우도 크래시 대신 빈 값 + alerts 안내로 폴백한다.
+        try:
+            indoor = IndoorReading(temp=snap.get("ctrl_temp"), humidity=snap.get("ctrl_hum"))
+            devices_on = set(snap.get("devices_on") or [])
+            devices = [DeviceStatus(name=d, on=d in devices_on) for d in DEVICES]
+            updated_at = _recorded_at(snap, fallback=now)
+            if snap_hour is not None and snap_hour < now.hour:
+                alerts.append(f"최근 기록 {snap_hour}시 — 이후 갱신 없음")
+        except (ValueError, TypeError) as e:
+            _log.warning("스냅샷 데이터 형식 오류 — 실내값 표시 생략: %s", e)
+            alerts.append("스냅샷 데이터 형식 오류 — 실내값 표시 불가")
+            indoor = IndoorReading()
+            devices = []
+            updated_at = now
 
     return EnvironmentTodayResponse(
         demo=True, updated_at=updated_at, outdoor=outdoor, indoor=indoor,
