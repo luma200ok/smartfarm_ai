@@ -102,6 +102,17 @@ class Prescription(BaseModel):
                                          "(smartfarm_ai#66) — 서비스가 클라이언트에 저품질 응답을 구분해 표시할 때 사용")
 
 
+def _llm_response_schema() -> dict:
+    """LLM에 요청할 JSON 스키마 — `fallback`은 서버가 최종 강제하는 전용 필드라(근거출처와 동일
+    원칙) 모델 요청 스키마에서 제외한다(P1 픽스, smartfarm_ai#66). 그대로 두면 LLM이 임의로
+    `"fallback": true`를 채워도 검증을 통과해 오염된 값이 응답에 그대로 실릴 수 있었다."""
+    schema = Prescription.model_json_schema()
+    schema["properties"].pop("fallback", None)
+    if "required" in schema:
+        schema["required"] = [f for f in schema["required"] if f != "fallback"]
+    return schema
+
+
 def _guard_directive(diag: dict | None) -> str:
     """환각 방어 ①·② — 진단 결과에 따라 최종 답변 톤을 지시."""
     if diag is None:
@@ -203,10 +214,12 @@ def _write_final(messages: list, user_msg: str, image_path: str | None, diag: di
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
         final = _client().chat(model=model, messages=messages,
-                               format=Prescription.model_json_schema(), keep_alive=KEEP_ALIVE)
+                               format=_llm_response_schema(), keep_alive=KEEP_ALIVE)
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
+            presc.fallback = False                        # 정상 경로 강제(P1 픽스) — LLM이
+            # 요청 스키마에서 제외됐어도 프롬프트 텍스트로 흉내내 채워보낸 값을 신뢰하지 않는다.
             history.save_prescription(user_msg, image_path, diag, presc, caller_ref=caller_ref)
             return presc
         except ValidationError as e:

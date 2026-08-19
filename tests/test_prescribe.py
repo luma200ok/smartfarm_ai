@@ -313,9 +313,10 @@ def test_fast_calls_diagnosis_directly_not_via_llm(monkeypatch):
     p = prescribe.prescribe_fast("이 잎 봐줘", image_path="x.jpg")
     assert calls["n"] == 1
     assert isinstance(p, Prescription)
-    # 최종 구조화 JSON 1회만 호출됨(format 포함)
+    # 최종 구조화 JSON 1회만 호출됨(format 포함) — fallback은 서버 전용이라 요청 스키마 제외(P1)
     assert mock_chat.call_count == 1
-    assert mock_chat.call_args.kwargs["format"] == Prescription.model_json_schema()
+    assert mock_chat.call_args.kwargs["format"] == prescribe._llm_response_schema()
+    assert "fallback" not in mock_chat.call_args.kwargs["format"]["properties"]
 
 
 def test_fast_uses_writer_model_env(monkeypatch):
@@ -432,6 +433,18 @@ def test_fast_schema_violation_retries_then_falls_back(monkeypatch):
 def test_fast_normal_path_fallback_is_false(monkeypatch):
     """정상 처방 경로는 fallback 기본값(False)을 그대로 유지한다(smartfarm_ai#66)."""
     _stub_final_chat(monkeypatch, return_value=_FINAL_MSG)
+    p = prescribe.prescribe_fast("오이 병도 알려줘")
+    assert p.fallback is False
+
+
+def test_fast_normal_path_ignores_llm_supplied_fallback_true(monkeypatch):
+    """P1 픽스 — LLM이 요청 스키마에 없는 `fallback: true`를 억지로 채워 보내도 서버가 강제로
+    False로 덮어써야 한다(정상 경로 오염 차단, smartfarm_ai#66)."""
+    poisoned = json.dumps({
+        "진단요약": "잎곰팡이병 의심", "원인": "고온다습", "즉시조치": "감염 잎 제거",
+        "예방": "환기", "재촬영시점": "3일 후", "근거출처": [], "fallback": True,
+    }, ensure_ascii=False)
+    _stub_final_chat(monkeypatch, return_value={"message": {"role": "assistant", "content": poisoned}})
     p = prescribe.prescribe_fast("오이 병도 알려줘")
     assert p.fallback is False
 
