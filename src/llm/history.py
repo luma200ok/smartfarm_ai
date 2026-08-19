@@ -14,8 +14,14 @@ from . import db
 _log = logging.getLogger(__name__)
 
 
-def save_prescription(user_msg: str, image_path: str | None, diag: dict | None, prescription) -> bool:
-    """처방 1건 저장. 성공 True, DB 미설정/실패 시 False(예외 전파 없음)."""
+def save_prescription(user_msg: str, image_path: str | None, diag: dict | None, prescription,
+                       caller_ref: str | None = None) -> bool:
+    """처방 1건 저장. 성공 True, DB 미설정/실패 시 False(예외 전파 없음).
+
+    caller_ref(smartfarm_ai#66) — 서비스(smartfarm_service)가 넘긴 optional 호출자 식별자
+    (최대 64자, API 계층에서 검증). 이력 보존 정책의 "태깅" 안 — 값 검증·의미 부여는
+    호출자 책임이고 이 함수는 그대로 저장만 한다.
+    """
     try:
         conn = db.get_conn()
         if conn is None:
@@ -23,10 +29,10 @@ def save_prescription(user_msg: str, image_path: str | None, diag: dict | None, 
         with conn:                   # 종료 시 close — connect-per-call이라 누수 방지 필수
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO prescriptions (user_msg, image_path, diag, prescription) "
-                    "VALUES (%s, %s, %s, %s)",
+                    "INSERT INTO prescriptions (user_msg, image_path, diag, prescription, caller_ref) "
+                    "VALUES (%s, %s, %s, %s, %s)",
                     (user_msg, image_path, Jsonb(diag) if diag is not None else None,
-                     Jsonb(prescription.model_dump())),
+                     Jsonb(prescription.model_dump()), caller_ref),
                 )
         return True
     except Exception as e:

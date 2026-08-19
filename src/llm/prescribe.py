@@ -97,6 +97,9 @@ class Prescription(BaseModel):
     재촬영시점: str = Field(description="언제 다시 사진을 찍어 확인하면 좋은지, 또는 재촬영 방법")
     근거출처: list[str] = Field(default_factory=list,
                              description="처방 근거 출처(RAG 검색 결과로 코드가 채우므로 모델은 비워도 됨)")
+    fallback: bool = Field(default=False,
+                            description="스키마 위반 재시도(1회) 후에도 실패해 안전 폴백 문구를 반환했으면 True"
+                                         "(smartfarm_ai#66) — 서비스가 클라이언트에 저품질 응답을 구분해 표시할 때 사용")
 
 
 def _guard_directive(diag: dict | None) -> str:
@@ -189,8 +192,13 @@ def _inject_directives(messages: list, user_msg: str, diag: dict | None,
 
 
 def _write_final(messages: list, user_msg: str, image_path: str | None, diag: dict | None,
-                  sources: list[str], on_progress, model: str) -> Prescription:
-    """공통 후처리 — 최종 구조화 JSON 생성(스키마 위반 1회 재시도) + 안전 폴백 + history 저장."""
+                  sources: list[str], on_progress, model: str,
+                  caller_ref: str | None = None) -> Prescription:
+    """공통 후처리 — 최종 구조화 JSON 생성(스키마 위반 1회 재시도) + 안전 폴백 + history 저장.
+
+    caller_ref(smartfarm_ai#66) — 이력 테넌시 태깅용 optional 식별자. 그대로
+    `history.save_prescription`에 전달만 하고 처방 생성 로직에는 관여하지 않는다.
+    """
     on_progress("writing")
     last_err = None
     for _ in range(2):                                   # 스키마 위반 시 1회 재시도
@@ -199,7 +207,7 @@ def _write_final(messages: list, user_msg: str, image_path: str | None, diag: di
         try:
             presc = Prescription.model_validate_json(final["message"]["content"])
             presc.근거출처 = sources                       # 근거는 코드가 채움(LLM 환각 배제)
-            history.save_prescription(user_msg, image_path, diag, presc)
+            history.save_prescription(user_msg, image_path, diag, presc, caller_ref=caller_ref)
             return presc
         except ValidationError as e:
             last_err = e
@@ -207,20 +215,24 @@ def _write_final(messages: list, user_msg: str, image_path: str | None, diag: di
                              "content": "직전 출력이 스키마와 맞지 않았다. 반드시 지정된 JSON 스키마로만 다시 출력하라."})
     _log.warning("구조화 출력 검증 실패 — 안전 폴백 반환: %s", last_err)
     presc = Prescription(진단요약="처방 생성에 실패했어요. 잠시 후 다시 시도해 주세요.",
-                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources)
-    history.save_prescription(user_msg, image_path, diag, presc)
+                        원인="-", 즉시조치="-", 예방="-", 재촬영시점="-", 근거출처=sources,
+                        fallback=True)
+    history.save_prescription(user_msg, image_path, diag, presc, caller_ref=caller_ref)
     return presc
 
 
 def prescribe_fast(user_msg: str, image_path: str | None = None,
                     on_progress: "Callable[[str], None] | None" = None,
-                    diag: dict | None = None) -> Prescription:
+                    diag: dict | None = None,
+                    caller_ref: str | None = None) -> Prescription:
     """이슈 #18 — fast-path(1-call) 처방. tool 실행을 코드가 직행시키고 LLM은 최종 작성 1회만.
 
     처방 버튼 경로 전용(흐름 고정). CLI·비교 데모는 기존 prescribe()(agentic tool calling)를 유지.
 
     diag(#18 P2 픽스) — 호출자가 표시용으로 이미 get_diagnosis를 실행해뒀다면 그 결과를 넘겨
     재사용한다(DL 추론 2회 실행 방지). None이고 image_path가 있으면 기존대로 직접 호출한다.
+
+    caller_ref(smartfarm_ai#66) — optional 이력 태깅 식별자. history 저장에만 전달한다.
     """
     def _progress(stage: str) -> None:
         if on_progress is None:
@@ -249,7 +261,8 @@ def prescribe_fast(user_msg: str, image_path: str | None = None,
                          "content": "진단 결과: " + json.dumps(diag, ensure_ascii=False)})
 
     sources = _inject_directives(messages, user_msg, diag, _progress)
-    return _write_final(messages, user_msg, image_path, diag, sources, _progress, WRITER_MODEL)
+    return _write_final(messages, user_msg, image_path, diag, sources, _progress, WRITER_MODEL,
+                        caller_ref=caller_ref)
 
 
 def prescribe(user_msg: str, image_path: str | None = None,
