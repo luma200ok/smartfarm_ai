@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS prescriptions (
     prescription JSONB NOT NULL
 );
 
+-- 이력 테넌시 태깅(smartfarm_ai#66) — 서비스(smartfarm_service)가 넘긴 optional 호출자 식별자.
+-- 기존 테이블에도 멱등 적용되도록 CREATE TABLE과 별도 ALTER로 추가(신규 배포는 CREATE에서
+-- 곧장 만들어지지 않으므로 이 문이 항상 실행돼야 함).
+ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS caller_ref TEXT;
+
 -- ── 경보 이력 (조기경보 early_warning · 자동감시 monitor 공용) ─────
 CREATE TABLE IF NOT EXISTS alerts (
     id         BIGSERIAL PRIMARY KEY,
