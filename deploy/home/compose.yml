@@ -37,12 +37,12 @@ services:
       OLLAMA_HOST: ${OLLAMA_HOST}
       EMBED_MODEL: ${EMBED_MODEL}
       OLLAMA_WRITER_MODEL: ${OLLAMA_WRITER_MODEL}
-      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT}
+      OLLAMA_TIMEOUT: ${OLLAMA_TIMEOUT:-180}
       RAG_BACKEND: ${RAG_BACKEND}
       DATABASE_URL: ${DATABASE_URL}
       KMA_SERVICE_KEY: ${KMA_SERVICE_KEY}
-      FARM_LAT: ${FARM_LAT}
-      FARM_LON: ${FARM_LON}
+      FARM_LAT: ${FARM_LAT:-37.5665}
+      FARM_LON: ${FARM_LON:-126.9780}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
     volumes:
       # ~ 사용 금지 — sudo 헬퍼(root)로 실행하면 ~가 /root로 풀린다. env-file의 DATA_DIR(절대경로)로
@@ -80,8 +80,8 @@ services:
       SMARTFARM_API_URL: http://smartfarm-ai:8000
       OMP_NUM_THREADS: "1"
       KMA_SERVICE_KEY: ${KMA_SERVICE_KEY}
-      FARM_LAT: ${FARM_LAT}
-      FARM_LON: ${FARM_LON}
+      FARM_LAT: ${FARM_LAT:-37.5665}
+      FARM_LON: ${FARM_LON:-126.9780}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL}
     volumes:
       - ${DATA_DIR:?required}/models:/app/models:ro
