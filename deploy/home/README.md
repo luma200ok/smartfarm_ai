@@ -27,6 +27,14 @@ docker network create shared-net   # 이미 있으면 생략(smartfarm_service#2
 
 - [ ] backend(smartfarm_service)가 이미 `shared-net`에 조인돼 있는지 확인(`docker network inspect shared-net`)
 - [ ] `DATABASE_URL`을 쓸 경우 `db-postgres`도 `shared-net` 조인 확인
+- [ ] **pgvector 모드(`RAG_BACKEND=pgvector`) 사용 시** 최초 1회만 스키마 적용(멱등, 반복 적용 가능):
+
+      ```
+      docker exec -i db-postgres psql -U smartfarm -d smartfarm_ai < db/schema.sql
+      ```
+
+      참고: 현재 홈서버 `db-postgres`는 OCI 백업 복원본이라 이 스키마가 이미 적용돼 있을 가능성이 높다 —
+      멱등(`CREATE ... IF NOT EXISTS`)이므로 재실행해도 안전하며, 스킵해도 무방하다(존재 여부만 확인).
 
 ## 2. `.env` 작성
 
