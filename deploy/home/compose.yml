@@ -24,7 +24,7 @@ services:
       dockerfile: Dockerfile
     container_name: smartfarm-ai
     restart: unless-stopped
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --workers 1 --http h11
     extra_hosts:
       # Linux Docker Engine은 host.docker.internal을 기본 제공하지 않음 — Mac/Windows와 동일하게
       # 쓰려면 host-gateway 매핑이 필요(OLLAMA_HOST=http://host.docker.internal:11434 로 .env 설정).
