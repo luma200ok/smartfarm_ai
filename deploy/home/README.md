@@ -30,7 +30,7 @@ docker network create shared-net   # 이미 있으면 생략(smartfarm_service#2
 - [ ] **pgvector 모드(`RAG_BACKEND=pgvector`) 사용 시** 최초 1회만 스키마 적용(멱등, 반복 적용 가능):
 
       ```
-      docker exec -i db-postgres psql -U smartfarm -d smartfarm_ai < db/schema.sql
+      docker exec -i db-postgres psql -U smartfarm -d smartfarm < db/schema.sql
       ```
 
       참고: 현재 홈서버 `db-postgres`는 OCI 백업 복원본이라 이 스키마가 이미 적용돼 있을 가능성이 높다 —
