@@ -27,23 +27,25 @@ RUN PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
     # xgboost/torch/torchvision import는 제거 후에도 정상 동작 확인됨(nccl은 optional runtime dep).
     && pip uninstall -y nvidia-nccl-cu12
 
-# models/·data/ 는 복사하지 않는다 — compose에서 호스트 DATA_DIR을 /app/models·/app/data로
-# 바인드 마운트한다(.dockerignore로도 제외). .env 는 절대 복사하지 않는다 — app/api_client.py 등
-# 여러 모듈이 `load_dotenv(ROOT/".env", override=True)`를 호출하므로, 이미지에 .env가 들어가면
-# compose가 주입한 환경변수를 덮어써버린다(override=True). 파일이 없으면 dotenv는 조용히 no-op.
-COPY api ./api
-COPY app ./app
-COPY src ./src
-COPY db ./db
-COPY .streamlit ./.streamlit
-
 # UID/GID 1000 고정 — 호스트 DATA_DIR(models/·data/) 바인드 마운트 소유권과 맞추기 위해
 # (smartfarm_service backend/Dockerfile과 동일 이유). 이 베이스(Debian slim, python:3.11-slim)는
 # Ubuntu 계열과 달리 기본 UID 1000 유저가 없어(확인됨: getent passwd 1000 → 없음) userdel 불필요.
+# COPY --chown으로 소유권을 그때그때 지정하므로(아래) 여기서는 유저·그룹 생성만 한다(리뷰 P3-3 —
+# 레이어마다 COPY --chown이 이미 개별 소유권을 정하므로 마지막에 /app 전체를 다시 훑는 chown -R은 불필요).
 RUN groupadd --gid 1000 smartfarm \
-    && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin smartfarm \
-    && mkdir -p /app/models /app/data \
-    && chown -R smartfarm:smartfarm /app
+    && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin smartfarm
+
+# models/·data/ 는 복사하지 않는다 — compose에서 호스트 DATA_DIR을 /app/models(:ro)·/app/data로
+# 바인드 마운트한다(.dockerignore로도 제외, 마운트가 이 마운트포인트의 소유권을 덮어쓰므로 별도
+# chown 불필요). .env 는 절대 복사하지 않는다 — app/api_client.py 등 여러 모듈이
+# `load_dotenv(ROOT/".env", override=True)`를 호출하므로, 이미지에 .env가 들어가면 compose가
+# 주입한 환경변수를 덮어써버린다(override=True). 파일이 없으면 dotenv는 조용히 no-op.
+COPY --chown=smartfarm:smartfarm api ./api
+COPY --chown=smartfarm:smartfarm app ./app
+COPY --chown=smartfarm:smartfarm src ./src
+COPY --chown=smartfarm:smartfarm db ./db
+COPY --chown=smartfarm:smartfarm .streamlit ./.streamlit
+RUN mkdir -p /app/models /app/data
 
 USER smartfarm
 

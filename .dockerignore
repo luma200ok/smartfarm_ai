@@ -22,7 +22,8 @@ tests/
 
 .env
 .env.*
-!deploy/home/.env.example
+# deploy/ 전체가 아래에서 이미 빌드 컨텍스트 밖이라 .env.example을 되살리는 무효 예외는 두지 않는다
+# (Dockerfile도 deploy/를 COPY하지 않음 — 리뷰 P3-1).
 
 .devcontainer/
 .streamlit/secrets.toml
