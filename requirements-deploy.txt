@@ -29,3 +29,11 @@ matplotlib               # phase2_dl Grad-CAM 컬러맵(직접 import) — ultra
 # Phase 3+ — PostgreSQL + pgvector (RAG 저장소·처방/경보 이력, DATABASE_URL 미설정 시 미사용)
 psycopg[binary]
 pgvector
+
+# Phase 3 — LLM (이슈 #68 도커화 검증 중 발견: 기존에 이 파일에서 누락돼 있었음 —
+# src/llm/prescribe.py·pipeline.py·rag/store.py·app/views/prescribe.py가 모듈 최상단에서
+# `import ollama` 하므로 api/routers/prescriptions.py 임포트 체인 전체가 이 패키지 없이는
+# 기동조차 불가. python-dotenv도 app/api_client.py·src/llm/{db,weather,notify,prescribe}.py가
+# 최상단에서 `from dotenv import load_dotenv` — 동일하게 필수. requirements.txt와 이름 일치.
+ollama
+python-dotenv

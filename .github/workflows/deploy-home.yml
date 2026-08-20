@@ -1,0 +1,85 @@
+name: deploy-home
+
+# 홈서버 self-hosted runner 배포(이슈 #68 — smartfarm_service#27 파일럿 패턴 복제).
+# 기존 deploy.yml(OCI 배포)과 병행 유지 — 서로 독립. 이 워크플로우는 이 스택(api·streamlit)만 다룬다.
+#
+# 보안 결정 요약(smartfarm_service#27·#28·#29 리뷰 결과와 동일 구조):
+#   1) 트리거는 workflow_dispatch만 — public 레포 + self-hosted runner 조합에서 pull_request 계열
+#      트리거를 두면 포크 PR의 코드가 홈서버 러너에서 실행될 수 있으므로 수동 트리거로 원천 차단.
+#   2) GitHub Actions 시크릿 미사용 — 시크릿은 전부 홈서버 로컬 env-file(runner 계정 접근 불가,
+#      헬퍼가 root 권한으로만 읽음)에 존재하고 워크플로우/레포에는 어떤 값도 없다.
+#      GITHUB_TOKEN 권한도 contents: read로 최소화.
+#   3) 러너 권한 분리 — 러너는 전용 `runner` 계정(docker 그룹 미소속)으로 실행되고, 배포는 sudoers에
+#      인자까지 고정된 헬퍼(/usr/local/bin/smartfarm-ai-deploy — up|ps|prune|diagnose)만 sudo로 호출한다.
+#   4) 배포 입력 = root 소유 /opt/smartfarm/repo-ai — 헬퍼가 서버에서 직접 origin/main을 fetch/checkout해
+#      그 안의 compose만 실행하며, 러너 워크스페이스는 배포에 전혀 사용되지 않는다(checkout 스텝 없음).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# 배포 중복 실행 방지 — 진행 중 배포는 취소하지 않고 뒤 실행을 대기시킨다
+concurrency:
+  group: deploy-home-ai
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # 수동 dispatch라도 main 외 브랜치의 워크플로우 정의(리뷰 전 코드)가 홈서버에서 실행되는 것을 차단.
+    # 배포 코드 자체는 헬퍼가 항상 origin/main을 받으므로 dispatch ref와 무관 — 가드와 시맨틱 일치.
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, home]
+    timeout-minutes: 30
+    steps:
+      - name: Build & up (sudo helper)
+        # 헬퍼가 /opt/smartfarm/repo-ai에 origin/main을 fetch/checkout한 뒤 root로
+        # `docker compose -f <repo>/deploy/home/compose.yml --env-file <.env> up -d --build` 실행.
+        run: sudo -n /usr/local/bin/smartfarm-ai-deploy up
+
+      - name: Diagnose (up failed)
+        # diagnose는 컨테이너 상태 + api 헬스 요약만 stdout에 출력한다 — 전체 로그는 호스트
+        # /var/log/smartfarm-ai-deploy/last-failure.log(root 600)에만 저장(public Actions 로그 비노출).
+        if: failure()
+        run: sudo -n /usr/local/bin/smartfarm-ai-deploy diagnose || true
+
+      - name: Health check
+        # api는 127.0.0.1:8000에만 publish — 러너가 홈서버 로컬이므로 여기서 직접 curl 가능.
+        run: |
+          set -euo pipefail
+          ok=""
+          for i in 1 2 3 4 5 6; do
+            sleep 5
+            if curl -fs --max-time 5 http://127.0.0.1:8000/api/health > /dev/null; then
+              echo "healthy (attempt $i)"
+              ok=1
+              break
+            fi
+            echo "not ready yet (attempt $i)"
+          done
+          if [ -z "$ok" ]; then
+            echo "health check failed after 6 attempts" >&2
+            sudo -n /usr/local/bin/smartfarm-ai-deploy diagnose || true
+            exit 1
+          fi
+          # streamlit 스모크 — 루트 페이지 응답 확인(3회 × 5초 재시도)
+          sok=""
+          for i in 1 2 3; do
+            if curl -fsI --max-time 5 http://127.0.0.1:8501/ > /dev/null; then
+              echo "streamlit smoke OK (attempt $i)"
+              sok=1
+              break
+            fi
+            echo "streamlit not ready yet (attempt $i)"
+            sleep 5
+          done
+          if [ -z "$sok" ]; then
+            echo "streamlit smoke failed after 3 attempts" >&2
+            sudo -n /usr/local/bin/smartfarm-ai-deploy diagnose || true
+            exit 1
+          fi
+
+      - name: Prune dangling images
+        # 성공 배포 후에만 정리 — 실패 시엔 직전 이미지를 롤백용으로 남긴다(72h 보존 필터는 헬퍼 내부).
+        if: success()
+        run: sudo -n /usr/local/bin/smartfarm-ai-deploy prune || true

@@ -1,0 +1,33 @@
+# 이슈 #68 — 도커 이미지 빌드 컨텍스트 제외 목록.
+# models/·data/ 는 런타임 바인드 마운트 대상이라 이미지에 절대 포함하지 않는다(용량·시크릿 방지).
+
+.git/
+.github/
+
+models/
+data/
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+notebooks/
+mlruns/
+docs/
+tests/
+
+.env
+.env.*
+# deploy/ 전체가 아래에서 이미 빌드 컨텍스트 밖이라 .env.example을 되살리는 무효 예외는 두지 않는다
+# (Dockerfile도 deploy/를 COPY하지 않음 — 리뷰 P3-1).
+
+.devcontainer/
+.streamlit/secrets.toml
+
+README.md
+*.md
+deploy/
