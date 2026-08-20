@@ -83,6 +83,23 @@ def test_save_prescription_inserts_when_conn_available(monkeypatch):
     assert "INSERT INTO prescriptions" in conn.inserted[0][0]
 
 
+def test_save_prescription_inserts_caller_ref_when_given(monkeypatch):
+    """smartfarm_ai#66 — caller_ref가 INSERT 파라미터 끝에 그대로 실린다."""
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    ok = history.save_prescription("메시지", None, None, _FakePresc(), caller_ref="tenant-1")
+    assert ok is True
+    assert conn.inserted[0][1][-1] == "tenant-1"
+
+
+def test_save_prescription_caller_ref_default_none(monkeypatch):
+    """caller_ref 미전달 시 기존과 동일하게 None으로 저장된다."""
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    history.save_prescription("메시지", None, None, _FakePresc())
+    assert conn.inserted[0][1][-1] is None
+
+
 def test_save_alert_inserts_when_conn_available(monkeypatch):
     conn = _FakeConn()
     monkeypatch.setattr(history.db, "get_conn", lambda: conn)

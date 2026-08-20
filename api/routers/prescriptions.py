@@ -63,6 +63,10 @@ def _save_upload_to_tempfile(file: UploadFile) -> str | None:
 def create_prescription(
     question: str = Form(...),
     diagnosis: str | None = Form(None, description="이미 계산된 진단 결과(JSON 문자열) — 있으면 재사용"),
+    caller_ref: str | None = Form(
+        None, max_length=64,
+        description="이력 테넌시 태깅용 optional 호출자 식별자(smartfarm_ai#66, 최대 64자) — 미전달 시 기존과 동일(None)",
+    ),
     file: UploadFile | None = File(None),
 ) -> Prescription:
     diag = _parse_diagnosis(diagnosis)
@@ -71,7 +75,7 @@ def create_prescription(
     try:
         with inference_slot():  # 서버 혼잡 시 429(P2-2) — 디코드·검증도 CPU를 쓰므로 슬롯 안에서
             image_path = _save_upload_to_tempfile(file)
-            return prescribe_fast(question, image_path=image_path, diag=diag)
+            return prescribe_fast(question, image_path=image_path, diag=diag, caller_ref=caller_ref)
     finally:
         if image_path:
             Path(image_path).unlink(missing_ok=True)
