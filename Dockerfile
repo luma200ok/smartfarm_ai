@@ -33,7 +33,7 @@ RUN PIP_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu \
 # COPY --chown으로 소유권을 그때그때 지정하므로(아래) 여기서는 유저·그룹 생성만 한다(리뷰 P3-3 —
 # 레이어마다 COPY --chown이 이미 개별 소유권을 정하므로 마지막에 /app 전체를 다시 훑는 chown -R은 불필요).
 RUN groupadd --gid 1000 smartfarm \
-    && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin smartfarm
+    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin smartfarm
 
 # models/·data/ 는 복사하지 않는다 — compose에서 호스트 DATA_DIR을 /app/models(:ro)·/app/data로
 # 바인드 마운트한다(.dockerignore로도 제외, 마운트가 이 마운트포인트의 소유권을 덮어쓰므로 별도
