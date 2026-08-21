@@ -8,6 +8,8 @@ from pathlib import Path
 
 import streamlit as st
 
+from ui import page_header  # 페이지 헤더 배너 통일(#76) — streamlit_app이 app/을 sys.path에 올려둠
+
 ROOT = Path(__file__).resolve().parents[2]
 FIGS = ROOT / "docs" / "figures"
 REPO = "https://github.com/luma200ok/smartfarm_ai"
@@ -22,10 +24,10 @@ def _img(rel, caption=None):
 
 def render():
     # ── Hero ──
-    st.title("📈 프로젝트 개요·성과")
-    st.caption(
+    page_header(
+        "📈 프로젝트 개요·성과",
         "환경 센서 + 잎 사진을 학습해 관수·병해 진단·환기를 처방하는 멀티모달 AI. "
-        "한 작물(토마토)을 ML→DL→LLM으로 관통하며 단계마다 새 모달리티(정형→이미지→언어)를 도입했어요."
+        "한 작물(토마토)을 ML→DL→LLM으로 관통하며 단계마다 새 모달리티(정형→이미지→언어)를 도입했어요.",
     )
 
     # ── 핵심 지표 스트립(맨 위에 바로) ──

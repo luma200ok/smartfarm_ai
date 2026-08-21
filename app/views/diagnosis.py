@@ -25,6 +25,7 @@ if str(ROOT / "app") not in sys.path:
     sys.path.insert(0, str(ROOT / "app"))
 
 from api_client import api_base  # noqa: E402 — 위 sys.path 삽입 이후에 임포트해야 함
+from ui import page_header  # noqa: E402 — 동일(페이지 헤더 배너 통일, #76)
 
 CKPT = ROOT / "models" / "tomato_resnet18.pt"
 YOLO_CKPT = ROOT / "models" / "tomato_yolov8n.pt"
@@ -159,8 +160,8 @@ def _render_detect_api(pil2, image_bytes, conf):
 def render():
     from dl import infer
 
-    st.title("🍅 토마토 잎 병해 — 진단(Grad-CAM) · 위치 검출(YOLO)")
-    st.caption("ML로는 불가능한 '사진 진단' + 설명가능 AI(어느 병반을 보고 판단했나) + 장면 속 잎 위치 검출")
+    page_header("🍅 토마토 잎 병해 — 진단(Grad-CAM) · 위치 검출(YOLO)",
+                "ML로는 불가능한 '사진 진단' + 설명가능 AI(어느 병반을 보고 판단했나) + 장면 속 잎 위치 검출")
 
     tab_diag, tab_detect = st.tabs(["🔬 진단 + Grad-CAM", "🎯 위치 검출 (YOLO)"])
 
