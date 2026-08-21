@@ -1,11 +1,12 @@
 name: deploy-home
 
 # 홈서버 self-hosted runner 배포(이슈 #68 — smartfarm_service#27 파일럿 패턴 복제).
-# 기존 deploy.yml(OCI 배포)과 병행 유지 — 서로 독립. 이 워크플로우는 이 스택(api·streamlit)만 다룬다.
+# 기존 deploy.yml(OCI 배포)은 2026-08-21 disable — 이 워크플로우가 유일한 배포 경로. 이 스택(api·streamlit)만 다룬다.
 #
 # 보안 결정 요약(smartfarm_service#27·#28·#29 리뷰 결과와 동일 구조):
-#   1) 트리거는 workflow_dispatch만 — public 레포 + self-hosted runner 조합에서 pull_request 계열
-#      트리거를 두면 포크 PR의 코드가 홈서버 러너에서 실행될 수 있으므로 수동 트리거로 원천 차단.
+#   1) 트리거는 workflow_dispatch + push(main) — pull_request 계열 트리거는 계속 금지: public 레포 +
+#      self-hosted runner 조합에서 포크 PR의 코드가 홈서버 러너에서 실행될 수 있으므로 차단 유지.
+#      push는 main 한정이라 머지된 코드만 트리거한다(아래 main 가드와 이중 방어).
 #   2) GitHub Actions 시크릿 미사용 — 시크릿은 전부 홈서버 로컬 env-file(runner 계정 접근 불가,
 #      헬퍼가 root 권한으로만 읽음)에 존재하고 워크플로우/레포에는 어떤 값도 없다.
 #      GITHUB_TOKEN 권한도 contents: read로 최소화.
@@ -15,6 +16,8 @@ name: deploy-home
 #      그 안의 compose만 실행하며, 러너 워크스페이스는 배포에 전혀 사용되지 않는다(checkout 스텝 없음).
 on:
   workflow_dispatch: {}
+  push:
+    branches: [main]
 
 permissions:
   contents: read
