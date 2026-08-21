@@ -14,7 +14,9 @@ inject_css()가 두 팔레트(_DARK/_LIGHT) 중 하나를 CSS 변수(--sf-*)로 
 네이티브 테마는 .streamlit/config.toml에서 딥그린 다크로 고정하고(런타임 변경 API 없음),
 라이트 선택 시엔 data-testid 기반으로 앱 배경·사이드바·페이지링크 등 네이티브 컨테이너 색을
 CSS로 강제 오버라이드한다 — 이 testid들(stAppViewContainer/stSidebar/stHeader 등)은 Streamlit
-1.58.0 기준 확인된 값이며 향후 버전에서 이름이 바뀔 수 있다(버전 취약 지점).
+1.62.0 기준 확인된 값이며 향후 버전에서 이름이 바뀔 수 있다(버전 취약 지점 — 실제로 1.62에서
+탭이 BaseWeb button→react-aria div로 바뀌어 data-baseweb 셀렉터가 전멸했다, #78. 그래서
+requirements의 streamlit은 ~=로 고정하고 업그레이드는 UI 검수와 함께 의도적으로만 한다).
 """
 import html
 
@@ -183,27 +185,30 @@ def inject_css():
     }}
     [data-testid="stTable"] th {{ color: var(--sf-mut) !important; }}
 
-    /* 탭 라벨 색 회귀 픽스(리뷰 P1, 이슈 #48) — Streamlit 탭은
-       <button data-baseweb="tab"><div data-testid="stMarkdownContainer"><p>라벨</p></div></button>
-       구조라, 위 "[data-testid=stMarkdownContainer] *" 규칙이 <p>에 "직접" 매치돼 버튼의
-       color(선택=흰색/비선택=accent)를 상속받지 못하게 막아버린다 — 상속 vs 직접매치는
+    /* 탭 라벨 색 회귀 픽스(리뷰 P1, 이슈 #48) — Streamlit 탭 내부는
+       <탭 요소 role="tab"><div data-testid="stMarkdownContainer"><p>라벨</p></div></탭>
+       구조라, 위 "[data-testid=stMarkdownContainer] *" 규칙이 <p>에 "직접" 매치돼 탭의
+       color(선택/비선택)를 상속받지 못하게 막아버린다 — 상속 vs 직접매치는
        specificity/소스순서와 무관하게 항상 직접매치가 이기므로(캐스케이드 오해로 인한 P1),
        탭 내부 markdown 요소만 더 높은 specificity(.stTabs+attr+attr+*)로 "부모 color를
-       상속"하도록 되돌려 버튼의 기존 색 규칙이 다시 적용되게 한다.
+       상속"하도록 되돌려 탭의 기존 색 규칙이 다시 적용되게 한다.
        주의(2차 픽스) — 처음엔 "[data-testid=stMarkdownContainer] *"만 넣었더니 여전히
        ink로 보였다: 컨테이너 div 자신은 위 첫 블록의 "[data-testid=stMarkdownContainer]
        :not(...)"(컨테이너 자체를 직접 매치)에 그대로 걸려 ink가 되고, <p>는 "그 div"를
        상속하니 결국 ink가 이어졌다(브라우저로 직접 렌더 검증해서 잡음). 그래서 컨테이너
-       자신도 함께 inherit 대상에 넣어야 한다. */
-    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"],
-    .stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] * {{
+       자신도 함께 inherit 대상에 넣어야 한다.
+       (#78) 셀렉터는 data-baseweb이 아니라 role 기반 — streamlit 1.62가 탭을 BaseWeb
+       button에서 react-aria div(data-testid=stTab)로 갈아타며 data-baseweb 속성이 사라졌다.
+       role="tab"/"tablist"는 구·신 DOM 모두에 있어 버전 양쪽을 커버한다. */
+    .stTabs [role="tab"] [data-testid="stMarkdownContainer"],
+    .stTabs [role="tab"] [data-testid="stMarkdownContainer"] * {{
         color: inherit !important;
     }}
 
     /* 기존 탭 스타일 — 새 톤으로 유지. #76: 톤다운 후 칩이 작아 답답하다는 피드백으로
        폰트·패딩·간격 확대(1.15→1.3rem, 12/24→16/34px, gap 12→16px). */
-    .stTabs [data-baseweb="tab-list"] {{ gap: 16px; }}
-    .stTabs [data-baseweb="tab"] {{
+    .stTabs [role="tablist"] {{ gap: 16px; }}
+    .stTabs [role="tab"] {{
         font-size: 1.3rem;
         font-weight: 700;
         padding: 16px 34px;

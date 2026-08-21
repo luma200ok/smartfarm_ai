@@ -75,21 +75,21 @@ def _b_specificity(selector: str) -> int:
 
 def test_inject_css_tab_label_descendant_inherits_button_color_instead_of_ink_override(monkeypatch):
     """리뷰 P1 픽스(이슈 #48) — Streamlit 탭은
-    <button data-baseweb="tab"><div data-testid="stMarkdownContainer"><p>라벨</p></div></button>
+    <탭 요소 role="tab"><div data-testid="stMarkdownContainer"><p>라벨</p></div></탭> (1.62부터 react-aria div — #78로 role 기반 셀렉터 전환)
     구조라, 네이티브 텍스트 가독성 규칙의 '[data-testid="stMarkdownContainer"] *:not(...)'가
     <p>에 직접 매치돼 버튼의 color(선택=흰/비선택=accent) 상속을 막아버렸다(상속 vs 직접매치는
     specificity와 무관하게 항상 직접매치가 이김 — 이전 버전의 "!important 소스순서로 보호"
     주석은 캐스케이드 오해였음).
 
     단순 문자열 존재 확인은 이 회귀를 못 잡는다는 지적을 받아, 실제로 탭 전용 규칙
-    ('.stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] * { color: inherit }')의
+    ('.stTabs [role="tab"] [data-testid="stMarkdownContainer"] * { color: inherit }')의
     b-특이성이 일반 ink 오버라이드 셀렉터보다 높은지 직접 계산해 검증한다 — 그래야 탭 내부
     markdown 요소가 ink 대신 버튼의 color를 상속받을 수 있다."""
     ui_mod = _import_ui_module()
     css = _rendered_css(monkeypatch, ui_mod, "light")
 
     ink_override_selector = '[data-testid="stMarkdownContainer"] *:not([class*="sf-"])'
-    tab_guard_selector = '.stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"] *'
+    tab_guard_selector = '.stTabs [role="tab"] [data-testid="stMarkdownContainer"] *'
     assert ink_override_selector in css
     assert tab_guard_selector in css
 
@@ -119,7 +119,7 @@ def test_inject_css_tab_guard_also_covers_markdown_container_itself(monkeypatch)
     css = _rendered_css(monkeypatch, ui_mod, "light")
 
     ink_container_selector = '[data-testid="stMarkdownContainer"]:not([class*="sf-"])'
-    tab_guard_container_selector = '.stTabs [data-baseweb="tab"] [data-testid="stMarkdownContainer"]'
+    tab_guard_container_selector = '.stTabs [role="tab"] [data-testid="stMarkdownContainer"]'
     # 컨테이너 전용 항목이 콤마로 끝나는 "독립된" 셀렉터로 존재하는지 — descendant(" *") 항목의
     # 접두어로만 우연히 매치되는 게 아님을 보장(이게 없으면 이전 회귀가 재발한다).
     assert f"{tab_guard_container_selector}," in css
