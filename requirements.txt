@@ -8,7 +8,7 @@ seaborn
 ipykernel
 
 # Streamlit 데모 (멀티페이지 st.navigation 사용 → 1.36+ 필수)
-streamlit>=1.40
+streamlit~=1.62.0       # 1.62에서 탭 DOM(BaseWeb→react-aria) 변경으로 CSS 전멸(#78) — 업그레이드는 UI 검수와 함께 의도적으로
 altair>=5.0,<6           # app/views/monitor.py 오늘 운영 추이 차트(이슈 #25) — streamlit 전이 의존성에 우연히 의존 중이던 것을 명시
 
 # 노트북 빌드·실행 (src/ml/build_notebook.py)
