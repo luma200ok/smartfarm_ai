@@ -102,8 +102,9 @@ def test_inject_css_tab_label_descendant_inherits_button_color_instead_of_ink_ov
     assert "color: inherit !important" in tab_guard_rule
 
     # 탭 버튼 자체의 색 규칙(선택/비선택)은 그대로 유지돼야 한다(회귀 방지).
-    assert "color: var(--sf-accent) !important" in css  # 비선택 탭
-    assert "color: white !important" in css              # 선택 탭
+    # #73 톤다운: 선택=accent 글자(soft 칩 배경), 비선택=mut 글자(투명 배경).
+    assert "color: var(--sf-mut) !important" in css     # 비선택 탭
+    assert "color: var(--sf-accent) !important" in css  # 선택 탭
 
 
 def test_inject_css_tab_guard_also_covers_markdown_container_itself(monkeypatch):

@@ -31,7 +31,7 @@ _DARK = {
     "bg": "#0F1C15", "sidebar_bg": "#0F1C15", "ink": "#E9F2EA", "mut": "#8FA595",
     "line": "#26382C", "accent": "#5FD08A", "accent2": "#3F9D5C", "accent_soft": "#1D3527",
     "card_top": "#152520", "card_bot": "#152520",
-    "header_g1": "#13291D", "header_g2": "#0F2118", "header_border": "#26382C",
+    "header_g1": "#13291D", "header_g2": "#0F2118",
     "badge_bg": "#5FD08A", "badge_text": "#08130C",
     "kpi_value": "#FFFFFF", "shortcut_icon_text": "#08130C",
     "shadow": "0 2px 10px rgba(0, 0, 0, .35)",
@@ -54,7 +54,7 @@ _LIGHT = {
     "bg": "#FFFFFF", "sidebar_bg": "#F8FCF3", "ink": "#141A0E", "mut": "#66735A",
     "line": "#E6EBE0", "accent": "#3F7D23", "accent2": "#5BA82F", "accent_soft": "#EEF5E6",
     "card_top": "#F8FCF3", "card_bot": "#FFFFFF",
-    "header_g1": "#F2F9EA", "header_g2": "#E6F4D8", "header_border": "#DCEBC9",
+    "header_g1": "#F2F9EA", "header_g2": "#E6F4D8",
     "badge_bg": "#3F7D23", "badge_text": "#FFFFFF",
     "kpi_value": "#141A0E", "shortcut_icon_text": "#FFFFFF",
     "shadow": "0 1px 3px rgba(20, 40, 10, .06)",
@@ -206,28 +206,27 @@ def inject_css():
         font-size: 1.15rem;
         font-weight: 700;
         padding: 12px 24px;
-        background-color: var(--sf-accent-soft);
-        color: var(--sf-accent) !important;
+        background-color: transparent;
+        color: var(--sf-mut) !important;
         border-radius: 10px 10px 0 0;
     }}
+    /* 선택 탭은 accent 통배경 대신 은은한 칩(#73) — soft 배경 + accent 글자.
+       accent(#5FD08A) 통배경은 다크 배경과 대비가 과해 눈이 아프다는 피드백. */
     .stTabs [aria-selected="true"] {{
-        background-color: var(--sf-accent);
-        color: white !important;
+        background-color: var(--sf-accent-soft);
+        color: var(--sf-accent) !important;
     }}
 
-    /* ── 페이지 헤더(page_header) — 그린 그라데이션 띠 + 하단 accent 밑줄 + 뱃지 ── */
+    /* ── 페이지 헤더(page_header) — 그린 그라데이션 띠 + 뱃지 ──
+       테두리·하단 accent 밑줄은 박스가 갑갑해 보인다는 피드백(#73)으로 제거 —
+       은은한 그라데이션과 넉넉한 여백만으로 구획한다. */
     .sf-header {{
         background: linear-gradient(120deg, {p['header_g1']}, {p['header_g2']});
-        border: 1px solid {p['header_border']};
         border-radius: 16px;
-        padding: 18px 24px 16px;
-        margin-bottom: 18px;
+        padding: 26px 28px 24px;
+        margin-bottom: 26px;
         position: relative;
         overflow: hidden;
-    }}
-    .sf-header::after {{
-        content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
-        background: linear-gradient(90deg, var(--sf-accent), var(--sf-accent2));
     }}
     .sf-header-row {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
     .sf-header-title {{ margin: 0; font-size: 27px; font-weight: 900; letter-spacing: -.6px;
