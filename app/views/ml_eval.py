@@ -9,6 +9,8 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+from ui import page_header  # 페이지 헤더 배너 통일(#76) — streamlit_app이 app/을 sys.path에 올려둠
+
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_PATH = ROOT / "models" / "phase1_crop_env_clf.pkl"
 FIG = ROOT / "docs" / "figures" / "phase1_ml"
@@ -93,10 +95,10 @@ def tab_eda():
 
 
 def render():
-    st.title("📊 ML 실험 기록")
-    st.caption(
+    page_header(
+        "📊 ML 실험 기록",
         "환경 센서(온·습도·CO2·일사량) → XGBoost로 재배 작물 9종 예측(Phase 1) 실험 기록 · "
-        "농진청 스마트팜 현장 데이터(2022~2024) · test F1 0.68 · GroupKFold F1 0.49"
+        "농진청 스마트팜 현장 데이터(2022~2024) · test F1 0.68 · GroupKFold F1 0.49",
     )
 
     if not MODEL_PATH.exists():

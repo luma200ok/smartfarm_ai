@@ -200,15 +200,16 @@ def inject_css():
         color: inherit !important;
     }}
 
-    /* 기존 탭 스타일 — 새 톤으로 유지 */
-    .stTabs [data-baseweb="tab-list"] {{ gap: 12px; }}
+    /* 기존 탭 스타일 — 새 톤으로 유지. #76: 톤다운 후 칩이 작아 답답하다는 피드백으로
+       폰트·패딩·간격 확대(1.15→1.3rem, 12/24→16/34px, gap 12→16px). */
+    .stTabs [data-baseweb="tab-list"] {{ gap: 16px; }}
     .stTabs [data-baseweb="tab"] {{
-        font-size: 1.15rem;
+        font-size: 1.3rem;
         font-weight: 700;
-        padding: 12px 24px;
+        padding: 16px 34px;
         background-color: transparent;
         color: var(--sf-mut) !important;
-        border-radius: 10px 10px 0 0;
+        border-radius: 12px 12px 0 0;
     }}
     /* 선택 탭은 accent 통배경 대신 은은한 칩(#73) — soft 배경 + accent 글자.
        accent(#5FD08A) 통배경은 다크 배경과 대비가 과해 눈이 아프다는 피드백. */
