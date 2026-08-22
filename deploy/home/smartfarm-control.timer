@@ -1,0 +1,10 @@
+[Unit]
+Description=SmartFarm AI 오늘 운영 모드 알림 — 매시 실행 (홈서버 이식판)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+# Persistent=true: 서버 재부팅 등으로 시각을 놓쳐도 부팅 후 즉시 1회 보충 실행
+
+[Install]
+WantedBy=timers.target
