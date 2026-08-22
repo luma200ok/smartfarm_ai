@@ -1,0 +1,14 @@
+[Unit]
+Description=SmartFarm AI 오늘 운영 모드 알림 (control.live --notify, oneshot — docker exec)
+# arm1 네이티브 유닛의 홈서버 이식판(2026-08-22, OCI 퇴역).
+# 코드·환경변수(KMA·웹훅·DB·Ollama)는 smartfarm-ai 컨테이너 안의 것을 그대로 사용하고,
+# dedup 상태는 /home/jb/srv/smartfarm-ai/data(bind mount)의 control_live_state.json에 영속된다.
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker exec -e PYTHONPATH=/app/src -w /app smartfarm-ai python -m control.live --notify
+# 1회 실행 후 종료(oneshot) — 반복은 smartfarm-control.timer(OnCalendar=hourly)가 담당.
+TimeoutStartSec=300

@@ -34,7 +34,7 @@
 | 데이터(로컬) | `data/processed/env_daily.csv`(LSTM·센서, gitignore) · `data/tomato/*`(진단) · `data/nongsaro/*.md`(RAG, 커밋됨) |
 | 모델(로컬) | `models/*.pt`(gitignore) — `tomato_resnet18/mobilenet_v2/part/yolov8n`, `env_lstm.pt`(+meta json 커밋). `phase1_crop_env_clf.pkl` |
 | 테스트 | `pytest`(통합=실 Ollama·실 PG). `pytest -m "not integration"`으로 모킹만 |
-| 배포 | OCI(공용서버) — `docs/_local/deploy/oci-deployment.md` 참조 |
+| 배포 | 홈서버 도커(2026-08-21 OCI에서 이전, `deploy/home/` — deploy-home.yml push 자동배포). 매시 알림 타이머는 호스트 systemd `deploy/home/smartfarm-control.{service,timer}`(docker exec 이식판, 2026-08-22 arm1→홈 이전). 구 OCI 문서=`docs/_local/deploy/oci-deployment.md` |
 | 날씨 API | 기상청 단기예보(공공데이터포털) — `.env`의 `KMA_SERVICE_KEY`(로컬·서버 설정 완료), `FARM_LAT/LON` 미설정 시 서울 기본값. 미설정·장애 시 unavailable graceful |
 | DB(선택) | PostgreSQL16+pgvector — `RAG_BACKEND=pgvector`·`DATABASE_URL` 설정 시만 사용(기본은 `memory`, npz+무이력 그대로). RAG 검색 저장 + 처방/경보 이력. 미설정·장애 시 자동 폴백 |
 
