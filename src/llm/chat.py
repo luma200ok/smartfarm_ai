@@ -95,8 +95,20 @@ def _rag_sources(chunks: list[dict]) -> list[str]:
 
 
 def answer_chat(question: str, caller_ref: str | None = None) -> ChatAnswer:
-    """자유 질의 1건 → RAG 근거 주입 답변. LLM 예외(연결 실패·타임아웃 등) 시 200 + 안내문 +
-    fallback=True로 안전 폴백한다(처방과 동일 트레이드오프). 이력은 성공·폴백 모두 저장 시도한다.
+    """자유 질의 1건 → RAG 근거 주입 답변.
+
+    docs/api-contract.md §4.7 요구대로 `_client().chat(...)` 호출과 응답 파싱 전체를 넓은
+    `except Exception`으로 감싸 200 + 한국어 안내문 + `fallback=True`로 흡수한다(연결 실패·
+    타임아웃뿐 아니라 그 구간에서 발생하는 어떤 예외든 동일 취급). prescribe.py의
+    `_write_final`은 이와 다르다 — 거기서 잡는 건 "구조화 JSON 스키마 위반"(`ValidationError`,
+    1회 재시도 후 폴백)뿐이고, ollama 연결 실패·타임아웃 자체는 잡지 않고 그대로 전파해
+    호출자(라우터)가 500으로 받는다. 즉 "처방과 동일 트레이드오프"는 최종 사용자에게 200+안내문
+    으로 보인다는 결과만 같을 뿐, 여기서 실제로 무엇을 흡수하는지는 다르다.
+
+    ⚠️ 트레이드오프: 범위가 넓은 만큼 `resp["message"]["content"]`처럼 ollama 응답 구조가
+    바뀌어 `KeyError`가 나는 등 **버그도 같은 경로로 조용히 fallback 처리**될 수 있다(200
+    반환이라 클라이언트·모니터링에서 실패로 안 잡힘) — 원인 파악은 `_log.warning` 로그에
+    의존한다. 구조 변경 시 반드시 로그를 확인할 것.
 
     caller_ref(smartfarm_ai#66과 동일 컨벤션) — 이력 태깅용 optional 식별자. 저장에만 전달한다.
     """
