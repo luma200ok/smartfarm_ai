@@ -64,6 +64,12 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+    deploy:
+      resources:
+        limits:
+          # 실측 idle ~202MiB. Python ML 워크로드(torch 추론)라 요청 처리 중 사용량 변동폭이 크므로
+          # 여유를 넉넉히 잡는다(home-infra#9).
+          memory: 2G
 
   streamlit:
     build:
@@ -100,3 +106,9 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          # 실측 idle ~45MiB. UI 렌더링만 담당하고 추론은 api 컨테이너로 위임하므로 변동폭이
+          # 작다(home-infra#9).
+          memory: 512M
