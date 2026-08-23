@@ -23,8 +23,9 @@ case "$1" in
     "${COMPOSE[@]}" logs --tail=200 > "$LOG_DIR/last-failure.log" 2>&1 || true
     chmod 600 "$LOG_DIR/last-failure.log" || true
     "${COMPOSE[@]}" ps || true
-    # api는 container_name: smartfarm-ai 고정이지만, 프로젝트 스코프 조회는 ps -q로 안전하게(smartfarm_service 패턴과 일관)
-    API_ID="$("${COMPOSE[@]}" ps -q api 2>/dev/null || true)"
+    # 서비스 키는 smartfarm-ai-api 다(home-infra#15 — 공유망 일반명 충돌 회피).
+    # container_name: smartfarm-ai 는 그대로이지만, 프로젝트 스코프 조회는 ps -q로 안전하게.
+    API_ID="$("${COMPOSE[@]}" ps -q smartfarm-ai-api 2>/dev/null || true)"
     if [ -n "$API_ID" ]; then
       docker inspect "$API_ID" --format 'api health: {{json .State.Health.Status}}' || true
     fi
