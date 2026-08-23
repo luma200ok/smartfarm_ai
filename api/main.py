@@ -18,7 +18,7 @@ if str(ROOT / "src") not in sys.path:
 from fastapi import FastAPI  # noqa: E402
 
 from .errors import register_error_handlers  # noqa: E402
-from .routers import detections, diagnoses, environment, health, prescriptions  # noqa: E402
+from .routers import chat, detections, diagnoses, environment, health, prescriptions  # noqa: E402
 
 app = FastAPI(
     title="SmartFarm AI API",
@@ -32,3 +32,4 @@ app.include_router(diagnoses.router, prefix="/api")
 app.include_router(detections.router, prefix="/api")
 app.include_router(prescriptions.router, prefix="/api")
 app.include_router(environment.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")

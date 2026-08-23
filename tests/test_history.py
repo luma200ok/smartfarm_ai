@@ -54,6 +54,12 @@ def test_save_alert_noop_when_no_conn(monkeypatch):
     assert ok is False
 
 
+def test_save_chat_noop_when_no_conn(monkeypatch):
+    monkeypatch.setattr(history.db, "get_conn", lambda: None)
+    ok = history.save_chat("질문", "답변", [])
+    assert ok is False
+
+
 # ── 예외 삼킴 (DB 장애가 처방/경보 흐름을 막지 않음) ──────────────────
 def test_save_prescription_swallows_exception(monkeypatch):
     def _raise():
@@ -70,6 +76,15 @@ def test_save_alert_swallows_exception(monkeypatch):
 
     monkeypatch.setattr(history.db, "get_conn", _raise)
     ok = history.save_alert("early_warning", "주의", "leaf_mold", "고습", {})
+    assert ok is False
+
+
+def test_save_chat_swallows_exception(monkeypatch):
+    def _raise():
+        raise RuntimeError("PG 다운")
+
+    monkeypatch.setattr(history.db, "get_conn", _raise)
+    ok = history.save_chat("질문", "답변", [])
     assert ok is False
 
 
@@ -107,6 +122,31 @@ def test_save_alert_inserts_when_conn_available(monkeypatch):
     assert ok is True
     assert len(conn.inserted) == 1
     assert "INSERT INTO alerts" in conn.inserted[0][0]
+
+
+# ── smartfarm_ai#84: 챗(RAG 자유 질의) 이력 ─────────────────────────────
+def test_save_chat_inserts_when_conn_available(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    ok = history.save_chat("질문", "답변", ["출처1"])
+    assert ok is True
+    assert len(conn.inserted) == 1
+    assert "INSERT INTO chat_messages" in conn.inserted[0][0]
+
+
+def test_save_chat_inserts_caller_ref_when_given(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    ok = history.save_chat("질문", "답변", [], caller_ref="tenant-1")
+    assert ok is True
+    assert conn.inserted[0][1][-1] == "tenant-1"
+
+
+def test_save_chat_caller_ref_default_none(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    history.save_chat("질문", "답변", [])
+    assert conn.inserted[0][1][-1] is None
 
 
 def test_save_closes_connection(monkeypatch):
@@ -207,7 +247,7 @@ def pg_conn():
     conn = db_mod.get_conn()
     with open(ROOT / "db" / "schema.sql", encoding="utf-8") as f:
         conn.execute(f.read())
-    conn.execute("TRUNCATE prescriptions, alerts")
+    conn.execute("TRUNCATE prescriptions, alerts, chat_messages")
     yield conn
     conn.close()
 
@@ -224,3 +264,38 @@ def test_integration_save_prescription_and_alert(pg_conn):
         assert cur.fetchone()[0] == 1
         cur.execute("SELECT count(*) FROM alerts")
         assert cur.fetchone()[0] == 1
+
+
+# ── smartfarm_ai#84 후속(python-reviewer P3): save_chat 실 Postgres 라운드트립 ──────────
+# sources(list[str]) ↔ JSONB 직렬화(Jsonb 저장)·역직렬화(psycopg3 jsonb 로더 → 다시 list)를
+# 목으로는 못 잡는다 — 실제로 다시 읽어 타입·값·순서까지 보존되는지 검증한다(레포 룰:
+# 직렬화 변경은 실 DB 라운드트립 검증 의무).
+@pytest.mark.integration
+def test_integration_save_chat_roundtrips_sources_list(pg_conn):
+    sources = ["잎곰팡이병 방제 (농촌진흥청) — https://www.nongsaro.go.kr/", "두 번째 출처"]
+    ok = history.save_chat("실제 질문", "실제 답변", sources, caller_ref="tenant-1")
+    assert ok is True
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM chat_messages")
+        assert cur.fetchone()[0] == 1
+        cur.execute("SELECT question, answer, sources, caller_ref FROM chat_messages")
+        question, answer, saved_sources, caller_ref = cur.fetchone()
+        assert question == "실제 질문"
+        assert answer == "실제 답변"
+        assert isinstance(saved_sources, list)   # JSONB → psycopg3 로더가 파이썬 list로 역직렬화
+        assert saved_sources == sources          # 원소·순서 보존
+        assert caller_ref == "tenant-1"
+
+
+@pytest.mark.integration
+def test_integration_save_chat_empty_sources_roundtrips_as_empty_list(pg_conn):
+    ok = history.save_chat("질문 없음 출처", "답변", [])
+    assert ok is True
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT sources, caller_ref FROM chat_messages WHERE question = %s",
+                    ("질문 없음 출처",))
+        saved_sources, caller_ref = cur.fetchone()
+        assert saved_sources == []
+        assert caller_ref is None

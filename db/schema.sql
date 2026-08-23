@@ -43,6 +43,17 @@ CREATE TABLE IF NOT EXISTS prescriptions (
 -- 곧장 만들어지지 않으므로 이 문이 항상 실행돼야 함).
 ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS caller_ref TEXT;
 
+-- ── 챗 이력 (RAG 자유 질의, smartfarm_ai#84) ────────────────────────
+-- answer는 자유 텍스트(구조화 스키마 없음), sources는 코드가 RAG 검색 결과로 채운 문자열 배열.
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    question   TEXT NOT NULL,
+    answer     TEXT NOT NULL,
+    sources    JSONB,
+    caller_ref TEXT
+);
+
 -- ── 경보 이력 (조기경보 early_warning · 자동감시 monitor 공용) ─────
 CREATE TABLE IF NOT EXISTS alerts (
     id         BIGSERIAL PRIMARY KEY,
