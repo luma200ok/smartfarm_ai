@@ -69,6 +69,9 @@ services:
     build:
       context: ../..
       dockerfile: Dockerfile
+    # 고정 이름(#88) — smartfarm_service 스택의 cloudflared가 shared-net에서 컨테이너명 DNS로 찾는다
+    # (Cloudflare Public Hostname smartfarm-ai.luma200ok.com → http://smartfarm-ai-streamlit:8501).
+    container_name: smartfarm-ai-streamlit
     restart: unless-stopped
     command: streamlit run app/streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
     extra_hosts:
@@ -88,8 +91,11 @@ services:
       - ${DATA_DIR:?required}/data:/app/data
     networks:
       - default
+      # 터널 서빙 경로(#88) — cloudflared가 shared-net으로 직접 붙는다. api 호출은 여전히
+      # 같은 스택 default 네트워크(SMARTFARM_API_URL)로만 나가므로 노출 면적은 늘지 않는다.
+      - shared-net
     ports:
-      # 외부 노출은 추후 별도 터널 경로로 결정 — 지금은 로컬 스모크 전용 127.0.0.1 바인딩
+      # 로컬 스모크 전용 유지 — 외부 노출은 cloudflared(shared-net) 경유로만 이뤄진다
       - "127.0.0.1:8501:8501"
     depends_on:
       api:
