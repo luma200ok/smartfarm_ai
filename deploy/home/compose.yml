@@ -18,7 +18,13 @@ networks:
     external: true
 
 services:
-  api:
+  # ⚠️ 서비스 키가 `api`/`streamlit` 이 아닌 이유 (luma200ok/home-infra#15) — compose 는 서비스가
+  #    조인하는 **모든** 네트워크에 **서비스 키를 별칭으로 게시**한다. 공유망 shared-net(홈서버 전
+  #    스택 공용)에 `api`·`streamlit` 같은 일반명을 올리면 같은 이름을 올린 다른 스택과 도커 DNS 가
+  #    라운드로빈한다. 2026-08-23 같은 구조의 `frontend` 충돌로 farm.luma200ok.com 이 실제 502 가 났다.
+  #    ⚠️ `aliases:` 로는 못 막는다 — 별칭은 대체가 아니라 **추가**라 서비스 키가 그대로 남는다(실측).
+  #    컨테이너명(container_name)은 그대로라 터널 인그레스는 영향받지 않는다.
+  smartfarm-ai-api:
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -71,7 +77,17 @@ services:
           # 여유를 넉넉히 잡는다(home-infra#9).
           memory: 2G
 
-  streamlit:
+    # 디스크 상한(luma200ok/home-infra#16) — 호스트에 /etc/docker/daemon.json 이 없어
+    # json-file 이 **무제한**으로 쌓이는 상태다(2026-08-23 실측). restart: unless-stopped 와
+    # 겹치면 크래시 루프가 루트 파티션을 채우고, 그때는 메모리 상한과 똑같이 무관한 스택까지
+    # 동반 장애가 난다.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  smartfarm-ai-streamlit:
     build:
       context: ../..
       dockerfile: Dockerfile
@@ -104,7 +120,7 @@ services:
       # 로컬 스모크 전용 유지 — 외부 노출은 cloudflared(shared-net) 경유로만 이뤄진다
       - "127.0.0.1:8501:8501"
     depends_on:
-      api:
+      smartfarm-ai-api:
         condition: service_healthy
     deploy:
       resources:
@@ -112,3 +128,13 @@ services:
           # 실측 idle ~45MiB. UI 렌더링만 담당하고 추론은 api 컨테이너로 위임하므로 변동폭이
           # 작다(home-infra#9).
           memory: 512M
+
+    # 디스크 상한(luma200ok/home-infra#16) — 호스트에 /etc/docker/daemon.json 이 없어
+    # json-file 이 **무제한**으로 쌓이는 상태다(2026-08-23 실측). restart: unless-stopped 와
+    # 겹치면 크래시 루프가 루트 파티션을 채우고, 그때는 메모리 상한과 똑같이 무관한 스택까지
+    # 동반 장애가 난다.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
