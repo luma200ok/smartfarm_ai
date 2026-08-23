@@ -8,7 +8,7 @@ ApiError·동시성 캡 컨벤션을 그대로 따른다(docs/api-contract.md §
 from fastapi import APIRouter, Form
 from llm.chat import ChatAnswer, answer_chat
 
-from ..concurrency import inference_slot
+from ..concurrency import chat_slot, inference_slot
 
 router = APIRouter(tags=["chat"])
 
@@ -21,5 +21,9 @@ def create_chat(
         description="이력 테넌시 태깅용 optional 호출자 식별자(smartfarm_ai#66과 동일 컨벤션, 최대 64자)",
     ),
 ) -> ChatAnswer:
-    with inference_slot():  # 서버 혼잡 시 429 — 진단·처방과 동일 슬롯(합계 2) 공유
-        return answer_chat(question, caller_ref=caller_ref)
+    # chat_slot() 먼저(챗 하위 상한 1, security-reviewer P2 smartfarm_ai#84) → 그 안에서
+    # 공유 inference_slot()(진단·처방과 합계 2 공유). 둘 다 non-blocking·즉시 429, 해제는
+    # with 중첩 종료 시 자동 역순이라 데드락 없음.
+    with chat_slot():
+        with inference_slot():
+            return answer_chat(question, caller_ref=caller_ref)
