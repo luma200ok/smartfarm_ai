@@ -54,6 +54,12 @@ def test_save_alert_noop_when_no_conn(monkeypatch):
     assert ok is False
 
 
+def test_save_chat_noop_when_no_conn(monkeypatch):
+    monkeypatch.setattr(history.db, "get_conn", lambda: None)
+    ok = history.save_chat("질문", "답변", [])
+    assert ok is False
+
+
 # ── 예외 삼킴 (DB 장애가 처방/경보 흐름을 막지 않음) ──────────────────
 def test_save_prescription_swallows_exception(monkeypatch):
     def _raise():
@@ -70,6 +76,15 @@ def test_save_alert_swallows_exception(monkeypatch):
 
     monkeypatch.setattr(history.db, "get_conn", _raise)
     ok = history.save_alert("early_warning", "주의", "leaf_mold", "고습", {})
+    assert ok is False
+
+
+def test_save_chat_swallows_exception(monkeypatch):
+    def _raise():
+        raise RuntimeError("PG 다운")
+
+    monkeypatch.setattr(history.db, "get_conn", _raise)
+    ok = history.save_chat("질문", "답변", [])
     assert ok is False
 
 
@@ -107,6 +122,31 @@ def test_save_alert_inserts_when_conn_available(monkeypatch):
     assert ok is True
     assert len(conn.inserted) == 1
     assert "INSERT INTO alerts" in conn.inserted[0][0]
+
+
+# ── smartfarm_ai#84: 챗(RAG 자유 질의) 이력 ─────────────────────────────
+def test_save_chat_inserts_when_conn_available(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    ok = history.save_chat("질문", "답변", ["출처1"])
+    assert ok is True
+    assert len(conn.inserted) == 1
+    assert "INSERT INTO chat_messages" in conn.inserted[0][0]
+
+
+def test_save_chat_inserts_caller_ref_when_given(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    ok = history.save_chat("질문", "답변", [], caller_ref="tenant-1")
+    assert ok is True
+    assert conn.inserted[0][1][-1] == "tenant-1"
+
+
+def test_save_chat_caller_ref_default_none(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr(history.db, "get_conn", lambda: conn)
+    history.save_chat("질문", "답변", [])
+    assert conn.inserted[0][1][-1] is None
 
 
 def test_save_closes_connection(monkeypatch):
@@ -207,7 +247,7 @@ def pg_conn():
     conn = db_mod.get_conn()
     with open(ROOT / "db" / "schema.sql", encoding="utf-8") as f:
         conn.execute(f.read())
-    conn.execute("TRUNCATE prescriptions, alerts")
+    conn.execute("TRUNCATE prescriptions, alerts, chat_messages")
     yield conn
     conn.close()
 
