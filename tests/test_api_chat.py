@@ -11,7 +11,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from api.concurrency import MAX_CONCURRENT_INFERENCE, _inference_slots
+from api.concurrency import MAX_CONCURRENT_CHAT, MAX_CONCURRENT_INFERENCE, _chat_slots, _inference_slots
 from llm import chat
 
 _RAG_CHUNKS = [
@@ -81,6 +81,58 @@ def test_chat_returns_429_when_slots_exhausted(api_client):
         r = api_client.post("/api/chat", data={"question": "질문"})
         assert r.status_code == 429
         assert r.json() == {"detail": "서버가 혼잡합니다. 잠시 후 다시 시도하세요."}
+    finally:
+        for _ in acquired:
+            _inference_slots.release()
+
+
+# ── 챗 전용 하위 상한(security-reviewer P2, smartfarm_ai#84) ─────────────
+# 챗이 공유 inference_slot(합계 2)을 전부 점유해 진단·처방을 굶기지 못하도록,
+# chat_slot(MAX_CONCURRENT_CHAT=1)을 먼저 획득해야만 inference_slot을 시도한다.
+def test_chat_second_concurrent_chat_is_429_even_with_shared_slots_free(api_client):
+    """chat_slot을 1개 미리 점유하면(=챗 1건 처리 중) 공유 inference_slot이 남아 있어도
+    두 번째 챗 요청은 429여야 한다(챗은 최대 1슬롯만 쓸 수 있음)."""
+    assert _chat_slots.acquire(blocking=False) is True
+    try:
+        assert _inference_slots._value == MAX_CONCURRENT_INFERENCE  # 공유 슬롯은 아직 안 건드림
+        r = api_client.post("/api/chat", data={"question": "질문"})
+        assert r.status_code == 429
+        assert r.json() == {"detail": "서버가 혼잡합니다. 잠시 후 다시 시도하세요."}
+    finally:
+        _chat_slots.release()
+
+
+def test_chat_holds_at_most_one_shared_slot_leaving_room_for_diagnosis_prescription(api_client, monkeypatch):
+    """챗 처리 도중(핸들러 안에서) 공유 슬롯은 정확히 1개만 소비돼야 한다 —
+    진단·처방용으로 최소 1개(MAX_CONCURRENT_INFERENCE - 1)가 항상 남아 있어야 한다."""
+    monkeypatch.setattr(chat, "retrieve", lambda q, disease=None, k=3: [])
+    observed = {}
+
+    def _fake_chat(*args, **kwargs):
+        # LLM 호출 시점 = 챗이 chat_slot·inference_slot을 모두 쥐고 있는 상태
+        observed["inference_free"] = _inference_slots._value
+        observed["chat_free"] = _chat_slots._value
+        return {"message": {"role": "assistant", "content": "답변"}}
+
+    monkeypatch.setattr(chat, "_client", lambda: SimpleNamespace(chat=_fake_chat))
+    r = api_client.post("/api/chat", data={"question": "질문"})
+    assert r.status_code == 200
+    assert observed["inference_free"] == MAX_CONCURRENT_INFERENCE - 1  # 진단·처방용 1개 이상 남음
+    assert observed["chat_free"] == MAX_CONCURRENT_CHAT - 1
+    # 요청 종료 후엔 둘 다 원복(release 확인)
+    assert _inference_slots._value == MAX_CONCURRENT_INFERENCE
+    assert _chat_slots._value == MAX_CONCURRENT_CHAT
+
+
+def test_chat_exhausted_shared_inference_slots_still_429_after_chat_slot_acquired(api_client):
+    """chat_slot은 남아 있어도(챗 자기 상한은 안 참) 공유 inference_slot이 다 차 있으면 429."""
+    acquired = [_inference_slots.acquire(blocking=False) for _ in range(MAX_CONCURRENT_INFERENCE)]
+    assert all(acquired)
+    try:
+        r = api_client.post("/api/chat", data={"question": "질문"})
+        assert r.status_code == 429
+        # chat_slot은 정상적으로 획득했다가 inference_slot 실패로 해제돼 원복돼 있어야 함
+        assert _chat_slots._value == MAX_CONCURRENT_CHAT
     finally:
         for _ in acquired:
             _inference_slots.release()
