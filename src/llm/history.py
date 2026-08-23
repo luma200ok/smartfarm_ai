@@ -40,6 +40,30 @@ def save_prescription(user_msg: str, image_path: str | None, diag: dict | None, 
         return False
 
 
+def save_chat(question: str, answer: str, sources: list[str], caller_ref: str | None = None) -> bool:
+    """챗(RAG 자유 질의) 1건 저장(smartfarm_ai#84). 성공 True, DB 미설정/실패 시 False(예외 전파 없음).
+
+    caller_ref는 save_prescription과 동일 컨벤션(이력 태깅용 optional 호출자 식별자, 최대
+    64자·검증은 API 계층). fallback 여부는 응답 전용 필드라 이 테이블에는 저장하지 않는다
+    (docs/api-contract.md §4.7 chat_messages 컬럼 확정: id/created_at/question/answer/sources/caller_ref).
+    """
+    try:
+        conn = db.get_conn()
+        if conn is None:
+            return False
+        with conn:                   # 종료 시 close — connect-per-call이라 누수 방지 필수
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO chat_messages (question, answer, sources, caller_ref) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (question, answer, Jsonb(sources), caller_ref),
+                )
+        return True
+    except Exception as e:
+        _log.warning("챗 이력 저장 실패(무시): %s", e)
+        return False
+
+
 def save_alert(kind: str, level: str, disease: str, reason: str, payload: dict) -> bool:
     """경보 1건 저장(kind='early_warning'|'monitor'). 성공 True, DB 미설정/실패 시 False."""
     try:
